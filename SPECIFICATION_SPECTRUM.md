@@ -79,6 +79,13 @@ Exemple de payload:
 }
 ```
 
+### `get_audio_snapshot` (compatibilité)
+
+- Outil de compatibilité pour certains clients IA.
+- Retourne le même contenu spectral que `get_spectrum`.
+- L’export audio brut (`wav`/`pcm`) n’est pas implémenté dans cette version.
+- Les arguments éventuels (`duration_ms`, `format`) sont acceptés mais informatifs.
+
 ### `trigger_button_and_get_spectrum`
 
 Objectif: déclencher un bouton Faust puis retourner une série temporelle compacte pour analyse IA de l'évolution.

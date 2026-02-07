@@ -194,6 +194,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       view?: View;
       ui?: unknown;
       runParams?: AppState['runParams'];
+      runParamsUpdatedAt?: number;
       runTransport?: AppState['runTransport'];
       runTrigger?: AppState['runTrigger'];
       spectrum?: AppState['spectrum'];
@@ -222,6 +223,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
     if (runParams !== undefined) {
       partial.runParams = runParams as AppState['runParams'];
+      partial.runParamsUpdatedAt = Date.now();
     }
     if (runTransport !== undefined) {
       partial.runTransport = runTransport as AppState['runTransport'];
@@ -291,7 +293,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return;
     }
     const nextParams = { ...(state.runParams || {}), [paramPath]: value };
-    const next = stateStore.update({ runParams: nextParams });
+    const next = stateStore.update({ runParams: nextParams, runParamsUpdatedAt: Date.now() });
     res.json({ sha1: next.sha1, path: paramPath, value, params: next.runParams || {} });
   });
 

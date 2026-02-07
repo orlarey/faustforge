@@ -48,6 +48,7 @@ export interface AppState {
   view: View;
   ui?: unknown;
   runParams?: Record<string, number>;
+  runParamsUpdatedAt?: number;
   runTransport?: {
     action: 'start' | 'stop' | 'toggle';
     nonce: number;
@@ -106,6 +107,7 @@ export class StateStore {
       view: state.view ?? 'dsp',
       ui: state.ui,
       runParams: state.runParams,
+      runParamsUpdatedAt: state.runParamsUpdatedAt,
       runTransport: state.runTransport,
       runTrigger: state.runTrigger,
       spectrum: state.spectrum,

@@ -431,10 +431,10 @@ Résultat :
   - sha1, filename de la session activée (null si session vide)
 ```
 
-### MCP‑10 : get_spectrum (snapshot spectre)
+### MCP‑10 : get_spectrum (contenu spectral courant)
 
 ```text
-mcp.get_spectrum : () → { mime: \"application/json\", content: SpectrumSnapshot }
+mcp.get_spectrum : () → { mime: \"application/json\", content: SpectrumSummary | SpectrumSnapshot }
 
 Préconditions :
   - Aucune stricte (retourne erreur si aucun snapshot)
@@ -443,8 +443,9 @@ Effets :
   - Aucun (lecture)
 
 Résultat :
-  - content : dernier spectre poussé par la vue run
-    (scale, fftSize, sampleRate, fmin, fmax, floorDb, data, capturedAt)
+  - content : dernier contenu spectral poussé par la vue run
+    - priorité : SpectrumSummary (spectrum_summary_v1)
+    - fallback de transition : SpectrumSnapshot legacy (FFT brut)
 ```
 
 ### MCP‑11 : get_run_ui (structure UI run)
@@ -501,6 +502,7 @@ Préconditions :
   - Une session active en état partagé
 
 Effets :
+  - Force la vue partagée sur \"run\" avant publication de la commande
   - Publie une commande transport run (avec nonce)
   - La vue run exécute la commande exactement une fois par nonce
 ```
@@ -514,6 +516,7 @@ Préconditions :
   - path pointe un paramètre bouton
 
 Effets :
+  - Force la vue partagée sur \"run\" avant trigger
   - Démarre l’audio si nécessaire
   - Déclenche un événement runTrigger atomique (press=1, attente, release=0)
 ```
@@ -521,20 +524,46 @@ Effets :
 ### MCP‑16 : trigger_button_and_get_spectrum
 
 ```text
-mcp.trigger_button_and_get_spectrum : (path: Path, holdMs?: Int, captureMs?: Int) → { path: Path, holdMs: Int, captureMs: Int, spectrum: SpectrumSnapshot }
+mcp.trigger_button_and_get_spectrum :
+  (path: Path, holdMs?: Int, captureMs?: Int, sampleEveryMs?: Int, maxFrames?: Int)
+  → {
+      path: Path,
+      holdMs: Int,
+      captureMs: Int,
+      sampleEveryMs: Int,
+      series: List<{ tMs: Int, summary: SpectrumSummary }>,
+      aggregate: { mode: \"max_hold\", summary: SpectrumSummary }
+    }
 
 Préconditions :
   - path pointe un paramètre bouton
 
 Effets :
+  - Force la vue partagée sur \"run\" avant trigger/capture
   - Démarre l’audio si nécessaire
   - Déclenche runTrigger atomique (press/release)
-  - Capture une fenêtre de spectres et retourne un agrégat max-hold par bin
+  - Capture une série temporelle de SpectrumSummary
+  - Retourne aussi un agrégat max-hold sur la fenêtre
   - La fenêtre de capture commence à l’instant d’appel (pas de snapshots anciens)
-  - Les bins non finis sont normalisés à floorDb avant retour
 
 But :
   - Fiabiliser l’analyse IA des sons transitoires (percussifs), en évitant les erreurs de timing entre trigger et capture.
+```
+
+### MCP‑17 : get_audio_snapshot (compatibilité)
+
+```text
+mcp.get_audio_snapshot : (duration_ms?: Int, format?: \"wav\" | \"pcm\") → { mime: \"application/json\", content: SpectrumSummary | SpectrumSnapshot }
+
+Préconditions :
+  - Aucune stricte (retourne erreur si aucune donnée spectrale)
+
+Effets :
+  - Aucun (lecture)
+
+Résultat :
+  - Alias de compatibilité de get_spectrum pour certains clients IA
+  - Le rendu audio brut (wav/pcm) n’est pas implémenté
 ```
 
 ## Boucle IA Run (pilotage + capture)
@@ -547,14 +576,15 @@ Boucle recommandée pour interaction IA :
 3) run_transport(\"start\")   -- audio ON
 4) set_run_param(...)        -- réglages continus
 5) trigger_button_and_get_spectrum(path, holdMs, captureMs)
-6) analyser spectrum.data
+6) analyser series + aggregate.summary
 7) itérer les paramètres puis recapturer
 ```
 
 Contraintes temporelles :
 - Les paramètres continus passent par runParams (état persistant).
+- runParamsUpdatedAt versionne les paramètres partagés pour éviter les rollbacks en cas d'interactions UI/IA concurrentes.
 - Les triggers boutons passent par runTrigger (événement avec nonce).
-- Le spectre est poussé périodiquement par la vue run, puis agrégé max-hold côté MCP pendant `captureMs`.
+- Le contenu spectral est poussé périodiquement par la vue run (summary prioritaire), puis agrégé côté MCP pendant `captureMs`.
 
 ### Note : pas de suppression via MCP
 

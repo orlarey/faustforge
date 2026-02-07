@@ -47,6 +47,25 @@ docker run -d \
   ghcr.io/orlarey/faustforge:latest
 ```
 
+### Windows (PowerShell)
+
+```powershell
+$sessions = "$env:USERPROFILE\.faustforge\sessions"
+New-Item -ItemType Directory -Force -Path $sessions | Out-Null
+
+docker run -d `
+  --name faustforge `
+  -p 3000:3000 `
+  -v "${sessions}:/app/sessions" `
+  -v /var/run/docker.sock:/var/run/docker.sock `
+  -e SESSIONS_DIR=/app/sessions `
+  -e HOST_SESSIONS_DIR="$sessions" `
+  -e FAUST_HTTP_URL=http://localhost:3000 `
+  ghcr.io/orlarey/faustforge:latest
+```
+
+Then open `http://localhost:3000`.
+
 ## Build Locally (Maintainers)
 
 ### 1) Build the local image
@@ -110,7 +129,7 @@ Typical workflow:
 3) run_transport("start")
 4) set_run_param(...)
 5) trigger_button_and_get_spectrum(...)
-6) analyze spectrum.data
+6) analyze series and aggregate.summary
 7) iterate on DSP or parameters
 ```
 
@@ -127,7 +146,7 @@ Spectrum behavior:
 - `get_view_content` returns spectrum content when current view is `run`.
 - `get_spectrum` returns the latest spectrum summary independently of current view.
 - Capture starts at tool call time (only fresh snapshots are aggregated).
-- Non-finite FFT bins are clamped to `floorDb` before returning `spectrum.data`.
+- Legacy fallback remains available when summary is not present.
 
 Parameter behavior:
 - `hslider`, `vslider`, `nentry`: value persists until changed.

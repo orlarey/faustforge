@@ -9,6 +9,7 @@ const VERSION_TIMEOUT_MS = 10000; // 10 secondes
 let cachedFaustVersion: string | null = null;
 const CONTAINER_SESSIONS_DIR = process.env.SESSIONS_DIR || '/app/sessions';
 const HOST_SESSIONS_DIR = process.env.HOST_SESSIONS_DIR || '';
+const WINDOWS_ABS_PATH_RE = /^([a-zA-Z]):[\\/](.*)$/;
 
 export interface DockerResult {
   success: boolean;
@@ -38,7 +39,7 @@ export function runFaustDocker(
     const dockerArgs = [
       'run',
       '--rm',
-      '-v', `${mountPath}:/tmp`,
+      '--mount', `type=bind,src=${mountPath},target=/tmp`,
       '-w', '/tmp',
       DOCKER_IMAGE,
       `sourcecode/${filename}`,
@@ -99,16 +100,50 @@ export function runFaustDocker(
 
 function resolveDockerMountPath(sessionPath: string): string {
   if (!HOST_SESSIONS_DIR) {
-    return sessionPath;
+    return toDockerDesktopHostPath(sessionPath);
   }
-  const normalizedSession = path.resolve(sessionPath);
-  const normalizedContainerBase = path.resolve(CONTAINER_SESSIONS_DIR);
-  const normalizedHostBase = path.resolve(HOST_SESSIONS_DIR);
-  if (!normalizedSession.startsWith(`${normalizedContainerBase}${path.sep}`)) {
-    return sessionPath;
+  const normalizedSession = normalizePosix(sessionPath);
+  const normalizedContainerBase = normalizePosix(CONTAINER_SESSIONS_DIR);
+  if (!isInTree(normalizedSession, normalizedContainerBase)) {
+    return toDockerDesktopHostPath(sessionPath);
   }
-  const relative = path.relative(normalizedContainerBase, normalizedSession);
-  return path.join(normalizedHostBase, relative);
+  const relative =
+    normalizedSession === normalizedContainerBase
+      ? ''
+      : normalizedSession.slice(normalizedContainerBase.length + 1);
+  const hostPath = joinHostPath(HOST_SESSIONS_DIR, relative);
+  return toDockerDesktopHostPath(hostPath);
+}
+
+function normalizePosix(input: string): string {
+  const slashed = input.replace(/\\/g, '/');
+  return path.posix.normalize(slashed);
+}
+
+function isInTree(candidate: string, base: string): boolean {
+  if (candidate === base) return true;
+  return candidate.startsWith(`${base}/`);
+}
+
+function joinHostPath(base: string, relative: string): string {
+  if (!relative) return base;
+  const winMatch = WINDOWS_ABS_PATH_RE.exec(base);
+  if (winMatch) {
+    const baseClean = base.replace(/[\\/]+$/, '');
+    const relWin = relative.split('/').join('\\');
+    return `${baseClean}\\${relWin}`;
+  }
+  return path.posix.join(base, relative);
+}
+
+function toDockerDesktopHostPath(input: string): string {
+  const winMatch = WINDOWS_ABS_PATH_RE.exec(input);
+  if (!winMatch) {
+    return input;
+  }
+  const drive = winMatch[1].toLowerCase();
+  const rest = winMatch[2].replace(/\\/g, '/');
+  return `/run/desktop/mnt/host/${drive}/${rest}`;
 }
 
 /**

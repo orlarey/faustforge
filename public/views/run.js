@@ -45,6 +45,7 @@ let lastRunParamsSentAt = 0;
 let lastAppliedTransportNonce = 0;
 let lastAppliedTriggerNonce = 0;
 let runViewEnteredAt = 0;
+let lastAppliedRemoteRunParamsUpdatedAt = 0;
 
 export function getName() {
   return 'Run';
@@ -54,6 +55,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   cleanupAudio();
   currentSha = sha;
   runViewEnteredAt = Date.now();
+  lastAppliedRemoteRunParamsUpdatedAt = 0;
   lastSpectrumSummary = null;
 
   container.innerHTML = `
@@ -373,7 +375,14 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       if (!remote || remote.sha1 !== currentSha) return;
 
       if (remote.runParams && typeof remote.runParams === 'object') {
-        applyRemoteRunParams(remote.runParams);
+        const remoteParamsUpdatedAt =
+          typeof remote.runParamsUpdatedAt === 'number' ? remote.runParamsUpdatedAt : 0;
+        if (!remoteParamsUpdatedAt || remoteParamsUpdatedAt > lastAppliedRemoteRunParamsUpdatedAt) {
+          applyRemoteRunParams(remote.runParams);
+          if (remoteParamsUpdatedAt) {
+            lastAppliedRemoteRunParamsUpdatedAt = remoteParamsUpdatedAt;
+          }
+        }
       }
 
       if (remote.runTransport && typeof remote.runTransport.nonce === 'number') {
