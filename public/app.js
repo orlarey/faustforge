@@ -102,11 +102,11 @@ async function switchView(viewId) {
     viewSelect.value = viewId;
   }
 
+  // Persist view first to avoid race with Run view state updates (/api/state).
+  await syncState({ view: viewId });
+
   // Afficher la vue
   await renderCurrentView();
-
-  // Sync state to backend
-  syncState({ view: viewId });
 }
 
 /**

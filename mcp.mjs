@@ -32,6 +32,14 @@ async function runTransport(action) {
   });
 }
 
+async function ensureRunView() {
+  await requestJson('/api/state', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ view: 'run' })
+  });
+}
+
 async function triggerRunButton(path, holdMs) {
   return requestJson('/api/run/trigger', {
     method: 'POST',
@@ -40,47 +48,113 @@ async function triggerRunButton(path, holdMs) {
   });
 }
 
-async function collectSpectrumMaxHold(captureMs, pollMs = 80) {
+function getLatestSpectrumContent(state) {
+  if (state && state.spectrumSummary && state.spectrumSummary.type === 'spectrum_summary_v1') {
+    return state.spectrumSummary;
+  }
+  if (state && state.spectrum) {
+    return state.spectrum;
+  }
+  return null;
+}
+
+async function collectSpectrumSummarySeries(captureMs, sampleEveryMs = 80, maxFrames = 10) {
   const startedAt = Date.now();
   let lastCapturedAt = startedAt - 1;
-  let maxData = null;
-  let meta = null;
+  const series = [];
 
-  while (Date.now() - startedAt < captureMs) {
+  while (Date.now() - startedAt < captureMs && series.length < maxFrames) {
     const state = await requestJson('/api/state');
-    const s = state && state.spectrum ? state.spectrum : null;
-    if (s && Array.isArray(s.data) && s.data.length > 0) {
+    const summary = state && state.spectrumSummary ? state.spectrumSummary : null;
+    if (summary && summary.type === 'spectrum_summary_v1') {
       const capturedAt =
-        typeof s.capturedAt === 'number' ? s.capturedAt : state.updatedAt || Date.now();
+        typeof summary.capturedAt === 'number' ? summary.capturedAt : state.updatedAt || Date.now();
       if (capturedAt > lastCapturedAt) {
         lastCapturedAt = capturedAt;
-        const floorDb = typeof s.floorDb === 'number' ? s.floorDb : -110;
-        const safeData = s.data.map((v) => (typeof v === 'number' && Number.isFinite(v) ? v : floorDb));
-        if (!maxData) {
-          maxData = Array.from(safeData);
-          meta = {
-            capturedAt,
-            scale: s.scale,
-            fftSize: s.fftSize,
-            sampleRate: s.sampleRate,
-            fmin: s.fmin,
-            fmax: s.fmax,
-            floorDb
-          };
-        } else {
-          const n = Math.min(maxData.length, safeData.length);
-          for (let i = 0; i < n; i++) {
-            if (safeData[i] > maxData[i]) maxData[i] = safeData[i];
-          }
-          if (meta) meta.capturedAt = capturedAt;
-        }
+        series.push({
+          tMs: Math.max(0, capturedAt - startedAt),
+          summary
+        });
       }
     }
-    await sleep(pollMs);
+    await sleep(sampleEveryMs);
   }
 
-  if (!maxData || !meta) return null;
-  return { ...meta, data: maxData };
+  return series;
+}
+
+function aggregateSpectrumSeries(series) {
+  if (!Array.isArray(series) || series.length === 0) return null;
+  const base = series[0].summary;
+  const bandsCount = Array.isArray(base.bandsDbQ) ? base.bandsDbQ.length : 0;
+  const bandsDbQ = new Array(bandsCount).fill(-120);
+  const peakMap = new Map();
+  let rmsDbQ = -120;
+  let centroidHzSum = 0;
+  let rolloff95HzSum = 0;
+  let flatnessQ = 0;
+  let crestDbQ = -120;
+
+  for (const sample of series) {
+    const summary = sample.summary;
+    if (!summary) continue;
+    const bands = Array.isArray(summary.bandsDbQ) ? summary.bandsDbQ : [];
+    for (let i = 0; i < Math.min(bandsDbQ.length, bands.length); i++) {
+      if (bands[i] > bandsDbQ[i]) bandsDbQ[i] = bands[i];
+    }
+
+    const peaks = Array.isArray(summary.peaks) ? summary.peaks : [];
+    for (const peak of peaks) {
+      const hz = Math.round(peak.hz || 0);
+      const existing = peakMap.get(hz);
+      if (!existing || peak.dbQ > existing.dbQ) {
+        peakMap.set(hz, {
+          hz,
+          dbQ: Math.round(peak.dbQ || -120),
+          q: Number.isFinite(peak.q) ? peak.q : 0
+        });
+      }
+    }
+
+    const f = summary.features || {};
+    if (Number.isFinite(f.rmsDbQ) && f.rmsDbQ > rmsDbQ) rmsDbQ = f.rmsDbQ;
+    if (Number.isFinite(f.centroidHz)) centroidHzSum += f.centroidHz;
+    if (Number.isFinite(f.rolloff95Hz)) rolloff95HzSum += f.rolloff95Hz;
+    if (Number.isFinite(f.flatnessQ) && f.flatnessQ > flatnessQ) flatnessQ = f.flatnessQ;
+    if (Number.isFinite(f.crestDbQ) && f.crestDbQ > crestDbQ) crestDbQ = f.crestDbQ;
+  }
+
+  const peaks = Array.from(peakMap.values())
+    .sort((a, b) => b.dbQ - a.dbQ)
+    .slice(0, 8);
+  const n = series.length;
+  const features = {
+    rmsDbQ: Math.round(rmsDbQ),
+    centroidHz: Math.round(centroidHzSum / n),
+    rolloff95Hz: Math.round(rolloff95HzSum / n),
+    flatnessQ: Math.round(flatnessQ),
+    crestDbQ: Math.round(crestDbQ)
+  };
+  const firstFeatures = (series[0] && series[0].summary && series[0].summary.features) || null;
+  const delta = firstFeatures
+    ? {
+        rmsDbQ: features.rmsDbQ - (firstFeatures.rmsDbQ || 0),
+        centroidHz: features.centroidHz - (firstFeatures.centroidHz || 0),
+        rolloff95Hz: features.rolloff95Hz - (firstFeatures.rolloff95Hz || 0),
+        flatnessQ: features.flatnessQ - (firstFeatures.flatnessQ || 0),
+        crestDbQ: features.crestDbQ - (firstFeatures.crestDbQ || 0)
+      }
+    : undefined;
+
+  return {
+    type: 'spectrum_summary_v1',
+    capturedAt: series[series.length - 1].summary.capturedAt,
+    frame: base.frame,
+    bandsDbQ,
+    peaks,
+    features,
+    delta
+  };
 }
 
 function autoFilename() {
@@ -234,7 +308,7 @@ server.registerTool(
   'get_view_content',
   {
     description:
-      'Get content corresponding to the current view. For view=run, returns the latest spectrum snapshot.',
+      'Get content corresponding to the current view. For view=run, returns the latest spectrum summary.',
     inputSchema: {}
   },
   async () => {
@@ -265,8 +339,9 @@ server.registerTool(
     }
 
     if (state.view === 'run') {
-      if (state.spectrum) {
-        return toResult({ view: 'run', mime: 'application/json', content: state.spectrum });
+      const content = getLatestSpectrumContent(state);
+      if (content) {
+        return toResult({ view: 'run', mime: 'application/json', content });
       }
       throw new McpError(ErrorCode.InvalidParams, 'Run spectrum not available');
     }
@@ -278,15 +353,16 @@ server.registerTool(
 server.registerTool(
   'get_spectrum',
   {
-    description: 'Get the latest spectrum snapshot (independent of current view).',
+    description: 'Get the latest spectrum summary (independent of current view).',
     inputSchema: {}
   },
   async () => {
     const state = await requestJson('/api/state');
-    if (!state.spectrum) {
+    const content = getLatestSpectrumContent(state);
+    if (!content) {
       throw new McpError(ErrorCode.InvalidParams, 'Spectrum not available');
     }
-    return toResult({ mime: 'application/json', content: state.spectrum });
+    return toResult({ mime: 'application/json', content });
   }
 );
 
@@ -359,6 +435,7 @@ server.registerTool(
   },
   async ({ path, holdMs }) => {
     const duration = typeof holdMs === 'number' ? holdMs : 80;
+    await ensureRunView().catch(() => {});
     await runTransport('start').catch(() => {});
     await triggerRunButton(path, duration);
     return toResult({ path, holdMs: duration, triggered: true });
@@ -369,33 +446,44 @@ server.registerTool(
   'trigger_button_and_get_spectrum',
   {
     description: [
-      'Trigger a button and capture a max-hold spectrum window in one atomic call.',
-      'Useful for transient/percussive sounds where separate calls are too slow.'
+      'Trigger a button and capture a time series of compact spectrum summaries.',
+      'Also returns a max-hold aggregate summary over the capture window.'
     ].join('\n'),
     inputSchema: {
       path: z.string(),
       holdMs: z.number().int().min(1).max(5000).optional(),
-      captureMs: z.number().int().min(50).max(10000).optional()
+      captureMs: z.number().int().min(50).max(10000).optional(),
+      sampleEveryMs: z.number().int().min(40).max(500).optional(),
+      maxFrames: z.number().int().min(1).max(20).optional()
     }
   },
-  async ({ path, holdMs, captureMs }) => {
+  async ({ path, holdMs, captureMs, sampleEveryMs, maxFrames }) => {
     const duration = typeof holdMs === 'number' ? holdMs : 80;
     const windowMs = typeof captureMs === 'number' ? captureMs : 300;
+    const pollMs = typeof sampleEveryMs === 'number' ? sampleEveryMs : 80;
+    const frameCap = typeof maxFrames === 'number' ? maxFrames : 10;
+    await ensureRunView().catch(() => {});
     await runTransport('start').catch(() => {});
-    const capturePromise = collectSpectrumMaxHold(windowMs);
+    const capturePromise = collectSpectrumSummarySeries(windowMs, pollMs, frameCap);
     await triggerRunButton(path, duration);
-    const spectrum = await capturePromise;
-    if (!spectrum) {
+    const series = await capturePromise;
+    if (!series || series.length === 0) {
       throw new McpError(
         ErrorCode.InvalidParams,
-        'No spectrum captured. Ensure Run view is active and audio is running.'
+        'No spectrum summary captured. Ensure Run view is active and audio is running.'
       );
     }
+    const aggregateSummary = aggregateSpectrumSeries(series);
     return toResult({
       path,
       holdMs: duration,
       captureMs: windowMs,
-      spectrum
+      sampleEveryMs: pollMs,
+      series,
+      aggregate: {
+        mode: 'max_hold',
+        summary: aggregateSummary
+      }
     });
   }
 );
@@ -409,6 +497,7 @@ server.registerTool(
     }
   },
   async ({ action }) => {
+    await ensureRunView().catch(() => {});
     const result = await requestJson('/api/run/transport', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -538,14 +627,33 @@ server.registerTool(
 server.registerTool(
   'get_audio_snapshot',
   {
-    description: 'Get recent audio snapshot (not implemented yet).',
+    description:
+      'Compatibility tool. Returns the latest available spectrum content (summary preferred).',
     inputSchema: {
       duration_ms: z.number().int().optional(),
       format: z.enum(['wav', 'pcm']).optional()
     }
   },
-  async () => {
-    throw new McpError(ErrorCode.MethodNotFound, 'get_audio_snapshot not implemented');
+  async ({ duration_ms, format }) => {
+    const state = await requestJson('/api/state');
+    const content = getLatestSpectrumContent(state);
+    if (!content) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Audio snapshot not available. Ensure Run view is active and audio is running.'
+      );
+    }
+    return toResult({
+      compatibility: true,
+      tool: 'get_audio_snapshot',
+      note: 'Raw audio export is not implemented; returning latest spectrum content instead.',
+      requested: {
+        duration_ms: typeof duration_ms === 'number' ? duration_ms : undefined,
+        format: typeof format === 'string' ? format : undefined
+      },
+      mime: 'application/json',
+      content
+    });
   }
 );
 

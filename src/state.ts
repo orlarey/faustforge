@@ -3,6 +3,45 @@ import * as path from 'path';
 
 export type View = 'dsp' | 'cpp' | 'svg' | 'run';
 
+export interface SpectrumSummaryPeak {
+  hz: number;
+  dbQ: number;
+  q: number;
+}
+
+export interface SpectrumSummaryFeatures {
+  rmsDbQ: number;
+  centroidHz: number;
+  rolloff95Hz: number;
+  flatnessQ: number;
+  crestDbQ: number;
+}
+
+export interface SpectrumSummaryDelta {
+  rmsDbQ: number;
+  centroidHz: number;
+  rolloff95Hz: number;
+  flatnessQ: number;
+  crestDbQ: number;
+}
+
+export interface SpectrumSummary {
+  type: 'spectrum_summary_v1';
+  capturedAt: number;
+  frame: {
+    sampleRate: number;
+    fftSize: number;
+    fmin: number;
+    fmax: number;
+    floorDb: number;
+    bandsCount: number;
+  };
+  bandsDbQ: number[];
+  peaks: SpectrumSummaryPeak[];
+  features: SpectrumSummaryFeatures;
+  delta?: SpectrumSummaryDelta;
+}
+
 export interface AppState {
   sha1: string | null;
   filename: string | null;
@@ -28,6 +67,7 @@ export interface AppState {
     floorDb: number;
     data: number[];
   };
+  spectrumSummary?: SpectrumSummary;
   updatedAt: number;
 }
 
@@ -69,6 +109,7 @@ export class StateStore {
       runTransport: state.runTransport,
       runTrigger: state.runTrigger,
       spectrum: state.spectrum,
+      spectrumSummary: state.spectrumSummary,
       updatedAt: Date.now()
     };
     fs.writeFileSync(this.statePath, JSON.stringify(next, null, 2), 'utf8');

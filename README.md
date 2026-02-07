@@ -52,19 +52,24 @@ docker run -d \
 ### 1) Build the local image
 
 ```bash
-docker build -t faustforge:latest .
+make rebuild
 ```
 
 ### 2) Run with helper script
 
 ```bash
-./scripts/run.sh
+make run
 ```
 
 The helper script uses:
 - `PORT` (default `3000`)
 - `NAME` (default `faustforge`)
 - `HOST_SESSIONS_DIR` (default `$HOME/.faustforge/sessions`)
+
+You can still use the raw scripts directly:
+- `./scripts/rebuild.sh`
+- `./scripts/run.sh`
+- `./scripts/stop.sh`
 
 ## Claude Desktop MCP Setup
 
@@ -115,12 +120,12 @@ Run control tools:
 - `set_run_param(path, value)` -> set one continuous parameter
 - `run_transport(action)` -> `start`, `stop`, or `toggle`
 - `trigger_button(path, holdMs?)` -> safe press/release cycle
-- `trigger_button_and_get_spectrum(path, holdMs?, captureMs?)` -> atomic trigger + max-hold spectrum capture
+- `trigger_button_and_get_spectrum(path, holdMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> trigger + spectrum-summary time series + max-hold aggregate
 
 Spectrum behavior:
-- When audio is running in `run` view, the frontend pushes spectrum snapshots to MCP state.
-- `get_view_content` returns spectrum when current view is `run`.
-- `get_spectrum` returns the latest spectrum independently of current view.
+- When audio is running in `run` view, the frontend pushes compact spectrum summaries to MCP state.
+- `get_view_content` returns spectrum content when current view is `run`.
+- `get_spectrum` returns the latest spectrum summary independently of current view.
 - Capture starts at tool call time (only fresh snapshots are aggregated).
 - Non-finite FFT bins are clamped to `floorDb` before returning `spectrum.data`.
 
@@ -132,8 +137,9 @@ Parameter behavior:
 ## Useful Docker Commands
 
 ```bash
-docker logs -f faustforge
-./scripts/stop.sh
+make help
+make logs
+make stop
 ```
 
 ## Published Image

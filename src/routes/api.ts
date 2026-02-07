@@ -183,10 +183,11 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   /**
    * POST /state
    * Met à jour l'état courant (session + vue)
-   * Body: { sha1?: string|null, view?: View, ui?: any, runParams?: any, runTransport?: any, runTrigger?: any, spectrum?: any }
+   * Body: { sha1?: string|null, view?: View, ui?: any, runParams?: any, runTransport?: any, runTrigger?: any, spectrum?: any, spectrumSummary?: any }
    */
   router.post('/state', (req: Request, res: Response) => {
-    const { sha1, view, ui, runParams, runTransport, runTrigger, spectrum } = req.body || {};
+    const { sha1, view, ui, runParams, runTransport, runTrigger, spectrum, spectrumSummary } =
+      req.body || {};
     const partial: {
       sha1?: string | null;
       filename?: string | null;
@@ -196,6 +197,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       runTransport?: AppState['runTransport'];
       runTrigger?: AppState['runTrigger'];
       spectrum?: AppState['spectrum'];
+      spectrumSummary?: AppState['spectrumSummary'];
     } = {};
 
     if (typeof view === 'string') {
@@ -229,6 +231,9 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
     if (spectrum !== undefined) {
       partial.spectrum = spectrum as AppState['spectrum'];
+    }
+    if (spectrumSummary !== undefined) {
+      partial.spectrumSummary = spectrumSummary as AppState['spectrumSummary'];
     }
 
     const next = stateStore.update(partial);
