@@ -368,6 +368,9 @@ async function submitFile(file) {
     // Afficher l'interface
     showInterface();
 
+    // Persist new active session first to avoid poll race reverting to previous session.
+    await syncState({ sha1: state.currentSha, view: state.currentView });
+
     // Rendre la vue courante
     await renderCurrentView();
 
