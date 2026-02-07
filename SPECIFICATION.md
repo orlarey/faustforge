@@ -1,8 +1,8 @@
-# Spécification : FaustMCP — Service Faust Web (aligné implémentation)
+# Spécification : faustforge — Service Faust Web (aligné implémentation)
 
 ## Scénario de référence
 
-Un programmeur Faust ouvre l’interface web de FaustMCP. À l’écran, la session est vide
+Un programmeur Faust ouvre l’interface web de faustforge. À l’écran, la session est vide
 et un message central l’invite à déposer un fichier `.dsp`. Il fait un drag & drop
 ou clique pour sélectionner un fichier.
 
@@ -79,7 +79,7 @@ Configuration MCP (extrait) :
 ```json
 {
   "mcpServers": {
-    "faustmcp": {
+    "faustforge": {
       "command": "docker",
       "args": ["exec", "-i", "faustforge", "node", "/app/mcp.mjs"]
     }

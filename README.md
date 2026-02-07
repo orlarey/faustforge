@@ -79,7 +79,7 @@ Add:
 ```json
 {
   "mcpServers": {
-    "faustmcp": {
+    "faustforge": {
       "command": "docker",
       "args": ["exec", "-i", "faustforge", "node", "/app/mcp.mjs"]
     }

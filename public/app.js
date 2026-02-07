@@ -1,5 +1,5 @@
 /**
- * FaustMCP Frontend Application
+ * faustforge Frontend Application
  * Navigation de sessions inspirée de faustservice
  */
 
@@ -451,7 +451,7 @@ function getClaudeMcpConfigText() {
   return JSON.stringify(
     {
       mcpServers: {
-        faustmcp: {
+        faustforge: {
           command: 'docker',
           args: ['exec', '-i', 'faustforge', 'node', '/app/mcp.mjs']
         }

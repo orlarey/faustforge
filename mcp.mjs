@@ -135,7 +135,7 @@ async function requestText(path) {
 }
 
 const server = new McpServer({
-  name: 'faustmcp',
+  name: 'faustforge',
   version: '0.1.0'
 });
 

@@ -13,7 +13,7 @@ const app = createServer({
 });
 
 app.listen(PORT, () => {
-  console.log(`FaustMCP server running on http://localhost:${PORT}`);
+  console.log(`faustforge server running on http://localhost:${PORT}`);
   console.log(`Sessions directory: ${SESSIONS_DIR}`);
   console.log(`Public directory: ${PUBLIC_DIR}`);
 });
