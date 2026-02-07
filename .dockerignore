@@ -1,0 +1,13 @@
+.git
+.gitignore
+.claude
+node_modules
+dist
+sessions
+*.log
+temp.txt
+test.dsp
+wahoo.dsp
+wahoomidi.dsp
+FORMAL_METHOD.md
+SPECIFICATION.md

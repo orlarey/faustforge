@@ -1,0 +1,881 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  background: #1f1f1f;
+  color: #b0b0b0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header unifié */
+header {
+  padding: 0 1rem;
+  height: 48px;
+  background: #181818;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+}
+
+header h1 {
+  font-size: 1rem;
+  color: #ffffff;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.header-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+  justify-content: center;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Conteneur principal centré */
+main {
+  flex: 1;
+  padding: 1rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding-top: 64px;
+  padding-bottom: 40px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#session-label {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.3rem 0.6rem;
+  border-radius: 4px;
+  color: #888;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.8rem;
+  min-width: 160px;
+  max-width: 280px;
+  text-align: center;
+  cursor: default;
+  transition: all 0.2s ease;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#session-label.clickable {
+  cursor: pointer;
+}
+
+#session-label.clickable:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #b0b0b0;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.icon-btn {
+  background: rgba(255, 255, 255, 0.08);
+  color: #888;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  padding: 0.25rem 0.4rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.75rem;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: #b0b0b0;
+}
+
+.icon-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.primary-btn {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ccc;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.8rem;
+  transition: all 0.2s ease;
+}
+
+.primary-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+#view-select {
+  background: rgba(255, 255, 255, 0.08);
+  color: #888;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.8rem;
+}
+
+#view-select option {
+  background: #2a2a2a;
+  color: #b0b0b0;
+}
+
+/* Overlay de drop pleine page */
+#drop-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(31, 31, 31, 0.95);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.drop-overlay-content {
+  text-align: center;
+  color: #fff;
+  border: 2px dashed rgba(255, 255, 255, 0.4);
+  border-radius: 8px;
+  padding: 3rem 4rem;
+}
+
+.drop-overlay-content .drop-icon {
+  font-size: 3rem;
+  display: block;
+  margin-bottom: 0.5rem;
+  opacity: 0.7;
+}
+
+.drop-overlay-content p {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #b0b0b0;
+}
+
+.drop-overlay-content code {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  color: #fff;
+}
+
+/* Bandeau d'erreur */
+#error-banner {
+  background: rgba(192, 57, 43, 0.9);
+  color: white;
+  padding: 0.75rem 1rem;
+  border-radius: 4px;
+  margin: 0.75rem 0;
+  font-family: monospace;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Navigation par onglets (si utilisé) */
+#tabs {
+  display: flex;
+  gap: 0;
+  margin: 0.75rem 0 0 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#tabs button {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: none;
+  color: #666;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s ease;
+  border-radius: 4px 4px 0 0;
+  margin-right: -1px;
+}
+
+#tabs button:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #b0b0b0;
+}
+
+#tabs button.active {
+  background: rgba(40, 40, 40, 1);
+  color: #fff;
+  border-bottom: 1px solid rgb(40, 40, 40);
+  margin-bottom: -1px;
+}
+
+/* Conteneur de vue */
+#view-container {
+  background: rgba(80, 80, 80, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 0;
+  min-height: 400px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Éditeur de code */
+.code-editor {
+  display: flex;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  background: #ffffff;
+  border-radius: 4px;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.line-numbers {
+  background: #f5f5f5;
+  color: #999;
+  padding: 0.75rem 0.6rem;
+  text-align: right;
+  user-select: none;
+  border-right: 1px solid #e0e0e0;
+  min-width: 45px;
+  overflow-y: hidden;
+  white-space: pre;
+}
+
+.code-content {
+  flex: 1;
+  padding: 0.75rem;
+  overflow: auto;
+  white-space: pre;
+  color: #333;
+  min-height: 0;
+  height: 100%;
+}
+
+/* Coloration syntaxique Faust */
+.faust-keyword {
+  color: #0066cc;
+  font-weight: 600;
+}
+
+.faust-function {
+  color: #9900cc;
+}
+
+.faust-comment {
+  color: #888888;
+  font-style: italic;
+}
+
+.faust-string {
+  color: #008800;
+}
+
+.faust-number {
+  color: #cc6600;
+}
+
+.faust-operator {
+  color: #666666;
+}
+
+/* Coloration syntaxique C++ */
+.cpp-keyword {
+  color: #0000ff;
+  font-weight: 600;
+}
+
+.cpp-type {
+  color: #267f99;
+}
+
+.cpp-preprocessor {
+  color: #795e26;
+}
+
+.cpp-comment {
+  color: #008000;
+  font-style: italic;
+}
+
+.cpp-string {
+  color: #a31515;
+}
+
+.cpp-number {
+  color: #098658;
+}
+
+/* Utilitaires */
+.hidden {
+  display: none !important;
+}
+
+/* Footer minimaliste */
+footer {
+  padding: 0.5rem 1rem;
+  text-align: center;
+  font-size: 0.7rem;
+  color: #444;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #181818;
+  z-index: 100;
+}
+
+/* Loading state */
+.loading {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Loading overlay */
+#loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(31, 31, 31, 0.9);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#loading-overlay .loading-text {
+  color: #b0b0b0;
+  font-size: 1rem;
+}
+
+/* Vue SVG */
+.svg-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 450px;
+  flex: 1;
+}
+
+.svg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(40, 40, 40, 1);
+  border-radius: 4px 4px 0 0;
+  flex-shrink: 0;
+}
+
+.svg-current-file {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.8rem;
+  color: #666;
+  margin-left: 0.5rem;
+}
+
+.svg-zoom-level {
+  font-size: 0.8rem;
+  color: #666;
+  min-width: 2.5rem;
+  text-align: center;
+}
+
+.svg-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f5f5;
+  border-radius: 0 0 4px 4px;
+  overflow: auto;
+  position: relative;
+  min-height: 350px;
+}
+
+.svg-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem;
+}
+
+.svg-content svg {
+  max-width: 100%;
+  max-height: 65vh;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  background: white;
+}
+
+/* Overlay de progression */
+.svg-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(245, 245, 245, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.svg-progress-text {
+  font-size: 0.9rem;
+  color: #666;
+  padding: 0.75rem 1.5rem;
+  background: white;
+  border-radius: 4px;
+  border: 1px solid #e0e0e0;
+}
+
+/* Curseur pointer sur les liens SVG */
+.svg-content a {
+  cursor: pointer;
+}
+
+.info {
+  color: #666;
+  font-style: italic;
+  padding: 1.5rem;
+  text-align: center;
+}
+
+.error {
+  color: #c0392b;
+  padding: 1.5rem;
+  text-align: center;
+}
+
+/* Empty state */
+.empty-state {
+  flex: 1;
+  position: relative;
+  min-height: 300px;
+  text-align: center;
+  color: #888;
+}
+
+.empty-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.empty-icon {
+  width: 44px;
+  height: 44px;
+  position: relative;
+  margin-bottom: 0.75rem;
+  opacity: 0.7;
+}
+
+.empty-icon::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 6px;
+  width: 2px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.35);
+  transform: translateX(-50%);
+  border-radius: 2px;
+}
+
+.empty-icon::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 22px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid rgba(255, 255, 255, 0.35);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.35);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.empty-title {
+  font-size: 1.1rem;
+  color: #b0b0b0;
+  margin-bottom: 0.25rem;
+}
+
+.empty-subtitle {
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.empty-mcp-wrap {
+  position: absolute;
+  left: 50%;
+  bottom: 3.6rem;
+  transform: translateX(-50%);
+  width: min(340px, 38%);
+  min-width: 250px;
+}
+
+.empty-mcp {
+  margin-top: 0;
+  width: 100%;
+  text-align: left;
+  color: #474747;
+  font-size: 0.6rem;
+  line-height: 1.4;
+  padding: 0.8rem 0.55rem 0.45rem 0.55rem;
+  border: 1px dashed rgb(61 57 57);
+  border-radius: 6px;
+  overflow: auto;
+}
+
+.empty-mcp-copy {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.3rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    background: rgb(54 52 52 / 95%);
+    color: #8e8e8e;
+    font-size: 0.7rem;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.empty-mcp-copy:hover {
+  background: rgb(64 62 62 / 95%);
+  border-color: rgba(0, 0, 0, 0.2);
+  color: #9a9a9a;
+}
+
+/* Vue Run */
+.run-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1;
+  background: #1f1f1f;
+}
+
+.run-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(40, 40, 40, 1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.run-status {
+  font-size: 0.85rem;
+  color: #b0b0b0;
+}
+
+.run-note {
+  font-size: 0.75rem;
+  color: #666;
+}
+
+.run-midi-source {
+  font-size: 0.8rem;
+  color: #b0b0b0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.run-zoom {
+  font-size: 0.8rem;
+  color: #b0b0b0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.run-midi-source select {
+  background: #1a1a1a;
+  color: #b0b0b0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.8rem;
+}
+
+.run-zoom select {
+  background: #1a1a1a;
+  color: #b0b0b0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.8rem;
+}
+
+.run-mode select {
+  background: #1a1a1a;
+  color: #b0b0b0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.8rem;
+}
+
+.run-controls {
+  flex: 1;
+  overflow: auto;
+  padding: 1rem;
+  background: #f5f5f5;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.run-midi {
+  background: #141414;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.run-midi.hidden {
+  display: none;
+}
+
+.midi-keyboard {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.midi-key {
+  font-size: 0.7rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 4px;
+  border: 1px solid #d0d0d0;
+  background: #f2f2f2;
+  color: #222;
+  cursor: pointer;
+  user-select: none;
+}
+
+.midi-key.black {
+  background: #2b2b2b;
+  color: #e5e5e5;
+  border-color: #111;
+}
+
+.midi-key:active {
+  transform: translateY(1px);
+}
+
+.midi-hint {
+  font-size: 0.7rem;
+  color: #8a8a8a;
+  text-align: center;
+}
+
+.run-scope {
+  background: #0f0f0f;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.5rem 0.75rem 0.75rem 0.75rem;
+}
+
+.run-scope-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: #b0b0b0;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+
+.run-scope-controls {
+  display: flex;
+  gap: 0.75rem;
+  margin-left: auto;
+  color: #888;
+  font-size: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.run-scope-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.run-scope-controls input,
+.run-scope-controls select {
+  background: #1a1a1a;
+  color: #b0b0b0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.8rem;
+}
+
+.run-scope-controls .scope-input {
+  width: 3.5rem;
+}
+
+#scope-canvas {
+  width: 100%;
+  height: 180px;
+  display: block;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+
+.faust-ui-root {
+  display: inline-block;
+  width: fit-content;
+  margin: 0;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.faust-ui-group.faust-ui-vgroup.faust-ui-root {
+  margin: 0 !important;
+}
+
+.run-control {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.run-control label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: #333;
+  margin-bottom: 0.5rem;
+}
+
+.run-control input[type="range"] {
+  width: 100%;
+}
+
+.run-value {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+@media (max-width: 700px) {
+  header {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 0.5rem 0.75rem;
+    gap: 0.5rem;
+  }
+
+  header h1 {
+    font-size: 0.9rem;
+  }
+
+  .header-nav {
+    order: 3;
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+
+  .header-controls {
+    margin-left: auto;
+  }
+
+  #session-label {
+    min-width: 140px;
+    font-size: 0.75rem;
+  }
+
+  main {
+    padding: 0.75rem;
+    padding-top: 88px;
+    padding-bottom: 40px;
+  }
+
+  .empty-mcp-wrap {
+    bottom: 1.6rem;
+    width: min(320px, 82%);
+    min-width: 0;
+  }
+}
+.run-controls-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.run-controls-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+}
+
+.run-ui-zoom-wrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.run-ui-zoom-stage {
+  transform-origin: top left;
+}

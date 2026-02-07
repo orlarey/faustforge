@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FaustMCP</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>FaustMCP</h1>
+    <div class="header-nav">
+      <button id="session-prev" class="icon-btn" title="Previous session">◀</button>
+      <div id="session-label">Empty</div>
+      <button id="session-next" class="icon-btn" title="Next session">▶</button>
+    </div>
+    <div class="header-controls">
+      <select id="view-select" title="View"></select>
+      <button id="delete-session" class="icon-btn" title="Delete session" aria-label="Delete session">🗑</button>
+      <input type="file" id="file-input" accept=".dsp" hidden>
+      <button id="download-btn" class="primary-btn" title="Download" aria-label="Download">Download</button>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- Overlay de drop (pleine page) -->
+    <div id="drop-overlay" class="hidden">
+      <div class="drop-overlay-content">
+        <span class="drop-icon">↓</span>
+        <p>Drop <code>.dsp</code> file</p>
+      </div>
+    </div>
+
+    <!-- Overlay de chargement -->
+    <div id="loading-overlay" class="hidden">
+      <span class="loading-text">Compiling...</span>
+    </div>
+
+    <!-- Bandeau d'erreur -->
+    <div id="error-banner" class="hidden"></div>
+
+    <!-- Conteneur pour la vue active -->
+    <div id="view-container" class="hidden"></div>
+  </main>
+
+  <footer>
+    <span id="footer-version">v0.1</span>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
