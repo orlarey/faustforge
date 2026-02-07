@@ -44,6 +44,7 @@ let remoteSyncTimer = null;
 let lastRunParamsSentAt = 0;
 let lastAppliedTransportNonce = 0;
 let lastAppliedTriggerNonce = 0;
+let runViewEnteredAt = 0;
 
 export function getName() {
   return 'Run';
@@ -52,6 +53,7 @@ export function getName() {
 export async function render(container, { sha, runState, onRunStateChange }) {
   cleanupAudio();
   currentSha = sha;
+  runViewEnteredAt = Date.now();
   lastSpectrumSummary = null;
 
   container.innerHTML = `
@@ -394,7 +396,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
 
       if (remote.runTrigger && typeof remote.runTrigger.nonce === 'number') {
         const trigger = remote.runTrigger;
-        if (trigger.nonce !== lastAppliedTriggerNonce) {
+        if (trigger.nonce !== lastAppliedTriggerNonce && trigger.nonce >= runViewEnteredAt) {
           lastAppliedTriggerNonce = trigger.nonce;
           await executeLocalTrigger(trigger.path, trigger.holdMs);
         }
@@ -457,7 +459,12 @@ async function compileAndRenderUI(container, sha, voices = 0) {
   compiledUI = generator.getUI();
   uiParamPaths = collectParamPaths(compiledUI);
   uiButtonPaths = collectButtonPaths(compiledUI);
+  const hadLatchedButtons = normalizeLatchedButtonParams();
   pressedUiButtons.clear();
+  if (hadLatchedButtons) {
+    // Persist normalization so first Run entry does not replay stale button=1 state.
+    sendRunParamsSnapshot(true);
+  }
   try {
     await fetch('/api/state', {
       method: 'POST',
@@ -618,11 +625,16 @@ async function renderFaustUi(container, ui) {
       try {
         dspNode.setParamValue(path, value);
         paramValues[path] = value;
+        let forceSnapshot = false;
         if (uiButtonPaths.has(path)) {
-          if (value > 0) pressedUiButtons.add(path);
-          else pressedUiButtons.delete(path);
+          forceSnapshot = true;
+          if (value > 0) {
+            pressedUiButtons.add(path);
+          } else {
+            pressedUiButtons.delete(path);
+          }
         }
-        sendRunParamsSnapshot();
+        sendRunParamsSnapshot(forceSnapshot);
         if (emitRunStateFn) emitRunStateFn();
       } catch {
         // ignore
@@ -630,6 +642,7 @@ async function renderFaustUi(container, ui) {
     };
 
     applyParamValues();
+    resetUiButtonsToZero();
     installUiReleaseGuard();
     setupUiZoomObserver();
     applyUiZoom();
@@ -866,14 +879,19 @@ function applyRemoteRunParams(remoteParams) {
   let changed = false;
   for (const [path, value] of Object.entries(remoteParams)) {
     if (typeof value !== 'number' || Number.isNaN(value)) continue;
-    if (paramValues[path] === value) continue;
+    if (uiButtonPaths.has(path) && pressedUiButtons.has(path)) {
+      // Keep local hold authoritative while button is actively pressed by user.
+      continue;
+    }
+    const normalizedValue = normalizeRestoredParamValue(path, value);
+    if (paramValues[path] === normalizedValue) continue;
     try {
       if (dspNode) {
-        dspNode.setParamValue(path, value);
+        dspNode.setParamValue(path, normalizedValue);
       }
-      paramValues[path] = value;
+      paramValues[path] = normalizedValue;
       if (faustUIInstance) {
-        faustUIInstance.paramChangeByDSP(path, value);
+        faustUIInstance.paramChangeByDSP(path, normalizedValue);
       }
       changed = true;
     } catch {
@@ -937,16 +955,63 @@ function noteOffMidi(note = null) {
 
 function applyParamValues() {
   for (const [path, value] of Object.entries(paramValues)) {
+    const normalizedValue = normalizeRestoredParamValue(path, value);
     try {
       if (dspNode) {
-        dspNode.setParamValue(path, value);
+        dspNode.setParamValue(path, normalizedValue);
       }
       if (faustUIInstance) {
-        faustUIInstance.paramChangeByDSP(path, value);
+        faustUIInstance.paramChangeByDSP(path, normalizedValue);
+      }
+      if (paramValues[path] !== normalizedValue) {
+        paramValues[path] = normalizedValue;
       }
     } catch {
       // ignore
     }
+  }
+}
+
+function normalizeRestoredParamValue(path, value) {
+  // Faust buttons are impulse controls and must not stay latched on restore.
+  if (uiButtonPaths.has(path) && value > 0) return 0;
+  return value;
+}
+
+function normalizeLatchedButtonParams() {
+  let changed = false;
+  for (const path of uiButtonPaths) {
+    const current = paramValues[path];
+    if (typeof current === 'number' && current > 0) {
+      paramValues[path] = 0;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function resetUiButtonsToZero() {
+  if (uiButtonPaths.size === 0) return;
+  let changed = false;
+  for (const path of uiButtonPaths) {
+    if (paramValues[path] !== 0) {
+      changed = true;
+    }
+    try {
+      if (dspNode) {
+        dspNode.setParamValue(path, 0);
+      }
+      if (faustUIInstance) {
+        faustUIInstance.paramChangeByDSP(path, 0);
+      }
+    } catch {
+      // ignore
+    }
+    paramValues[path] = 0;
+  }
+  pressedUiButtons.clear();
+  if (changed) {
+    sendRunParamsSnapshot(true);
   }
 }
 
