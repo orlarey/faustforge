@@ -469,6 +469,92 @@ footer {
   border: 1px solid #e0e0e0;
 }
 
+/* Vue Signals (DOT) */
+.signals-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 450px;
+  flex: 1;
+}
+
+.signals-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.signals-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(40, 40, 40, 1);
+  border-radius: 4px 4px 0 0;
+  flex-shrink: 0;
+}
+
+.signals-zoom-level {
+  font-size: 0.8rem;
+  color: #666;
+  min-width: 2.5rem;
+  text-align: center;
+}
+
+.signals-container {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  background: #f5f5f5;
+  border-radius: 0 0 4px 4px;
+  overflow: auto;
+  position: relative;
+  min-height: 300px;
+}
+
+.signals-content {
+  padding: 0.75rem;
+  min-width: 100%;
+}
+
+.signals-content svg {
+  display: block;
+  max-width: none;
+}
+
+.signals-dot {
+  margin-top: 0.6rem;
+  padding: 0.75rem;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  background: #fafafa;
+  color: #333;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow: auto;
+  max-height: 180px;
+}
+
+.signals-degraded .signals-main {
+  flex-direction: row;
+}
+
+.signals-degraded .signals-container {
+  flex: 1 1 25%;
+  min-width: 200px;
+  min-height: 0;
+}
+
+.signals-degraded .signals-dot {
+  flex: 3 1 75%;
+  margin-top: 0;
+  max-height: none;
+  min-height: 0;
+}
+
 /* Curseur pointer sur les liens SVG */
 .svg-content a {
   cursor: pointer;

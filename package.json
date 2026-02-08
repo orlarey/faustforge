@@ -22,6 +22,7 @@
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@shren/faust-ui": "^1.1.19",
     "express": "^4.18.2",
+    "viz.js": "^2.1.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {

@@ -206,28 +206,37 @@ export function getFaustVersion(): Promise<string> {
 }
 
 /**
- * Analyse un fichier Faust (génère C++ et SVG)
+ * Analyse un fichier Faust (génère C++, SVG, et graphes DOT)
  */
 export async function analyzeFaust(
   sessionPath: string,
   filename: string
 ): Promise<{ success: boolean; errors: string }> {
-  // Arguments pour l'analyse : générer C++ et SVG
-  // Les fichiers sont écrits à la racine de /tmp (= session)
-  const args = [
+  // Passe principale (bloquante): C++, SVG et signaux.
+  // Les fichiers sont écrits à la racine de /tmp (= session).
+  const analyzeArgs = [
     '-o', 'generated.cpp',
-    '-svg'
+    '-svg',
+    '-sg'
   ];
 
-  const result = await runFaustDocker(sessionPath, filename, args);
+  const result = await runFaustDocker(sessionPath, filename, analyzeArgs);
 
   // Écrire les erreurs dans errors.log
   const errorsPath = path.join(sessionPath, 'errors.log');
   fs.writeFileSync(errorsPath, result.stderr, 'utf8');
 
-  // Déplacer les SVG générés dans svg/
+  // Déplacer les artefacts de la passe principale.
   if (result.success) {
     moveSvgFiles(sessionPath, filename);
+    moveSignalsDotFile(sessionPath, filename);
+
+    // Passe tasks (non bloquante): nécessite -vec avec -tg.
+    // Si cette passe échoue, on conserve la session utilisable sans tasks.dot.
+    const tasksResult = await runFaustDocker(sessionPath, filename, ['-vec', '-tg']);
+    if (tasksResult.success) {
+      moveTasksDotFile(sessionPath, filename);
+    }
   }
 
   return {
@@ -265,6 +274,46 @@ function moveSvgFiles(sessionPath: string, filename: string): void {
       // Supprimer le répertoire source
       fs.rmSync(svgSourceDir, { recursive: true, force: true });
     }
+  } catch {
+    // Ignorer les erreurs de déplacement
+  }
+}
+
+/**
+ * Déplace le graphe de signaux DOT vers un emplacement stable
+ */
+function moveSignalsDotFile(sessionPath: string, filename: string): void {
+  const sourcecodePath = path.join(sessionPath, 'sourcecode');
+  const candidates = [
+    path.join(sourcecodePath, `${filename}-sig.dot`),
+    path.join(sessionPath, `${filename}-sig.dot`)
+  ];
+  const dotDest = path.join(sessionPath, 'signals.dot');
+
+  try {
+    const dotSource = candidates.find((p) => fs.existsSync(p));
+    if (!dotSource) return;
+    fs.copyFileSync(dotSource, dotDest);
+  } catch {
+    // Ignorer les erreurs de déplacement
+  }
+}
+
+/**
+ * Déplace le graphe de tâches DOT vers un emplacement stable
+ */
+function moveTasksDotFile(sessionPath: string, filename: string): void {
+  const sourcecodePath = path.join(sessionPath, 'sourcecode');
+  const candidates = [
+    path.join(sourcecodePath, `${filename}.dot`),
+    path.join(sessionPath, `${filename}.dot`)
+  ];
+  const dotDest = path.join(sessionPath, 'tasks.dot');
+
+  try {
+    const dotSource = candidates.find((p) => fs.existsSync(p));
+    if (!dotSource) return;
+    fs.copyFileSync(dotSource, dotDest);
   } catch {
     // Ignorer les erreurs de déplacement
   }

@@ -605,3 +605,21 @@ Le protocole MCP n’expose pas d’opération de suppression.
 - **Delete** : suppression de la session courante via icône poubelle.
 
 ---
+
+## Évolution Et Migration
+
+Le service doit rester évolutif quand de nouvelles vues ou une nouvelle version du compilateur Faust sont introduites.
+
+Principes:
+- Une session existante peut ne pas contenir les nouveaux artefacts attendus (ex: `signals.dot` ajouté après coup).
+- L'UI doit gérer explicitement ce cas (`artefact non disponible`) sans casser la navigation.
+- Le système doit prévoir un mécanisme de régénération des artefacts d'une session existante.
+
+Pistes de mise en oeuvre (à prioriser ultérieurement):
+- Ajouter une version d'artefacts de session dans `metadata.json` (ex: `artifactsVersion`, `faustVersion`).
+- Détecter les sessions obsolètes et proposer/réaliser une régénération à la demande.
+- Exposer une opération API/MCP dédiée à la régénération (`reanalyze` / `upgrade session`).
+- Documenter la compatibilité ascendante par vue (quels artefacts sont requis).
+
+Objectif:
+- permettre à faustforge d'évoluer (nouvelles vues, évolution compilateur) sans invalider les sessions historiques.

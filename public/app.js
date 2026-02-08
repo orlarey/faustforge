@@ -39,13 +39,15 @@ const dropOverlay = document.getElementById('drop-overlay');
 const loadingOverlay = document.getElementById('loading-overlay');
 const footerVersion = document.getElementById('footer-version');
 const deleteSessionBtn = document.getElementById('delete-session');
+const refreshSessionBtn = document.getElementById('refresh-session');
 let lastStateTs = 0;
+let pasteSink = null;
 
 /**
  * Charge dynamiquement les modules de vue
  */
 async function loadViews() {
-  const viewModules = ['dsp', 'cpp', 'svg', 'run'];
+  const viewModules = ['dsp', 'cpp', 'signals', 'tasks', 'svg', 'run'];
 
   for (const viewName of viewModules) {
     try {
@@ -224,6 +226,7 @@ function updateSessionNavigation() {
     sessionPrev.disabled = state.sessions.length === 0;
     sessionNext.disabled = true;
     if (deleteSessionBtn) deleteSessionBtn.classList.add('hidden');
+    if (refreshSessionBtn) refreshSessionBtn.classList.add('hidden');
     if (downloadBtn) downloadBtn.classList.add('hidden');
   } else {
     // Session active
@@ -234,6 +237,7 @@ function updateSessionNavigation() {
     sessionPrev.disabled = state.sessionIndex === 0;
     sessionNext.disabled = false; // On peut toujours aller vers session vide
     if (deleteSessionBtn) deleteSessionBtn.classList.remove('hidden');
+    if (refreshSessionBtn) refreshSessionBtn.classList.remove('hidden');
     if (downloadBtn) downloadBtn.classList.remove('hidden');
   }
 }
@@ -325,13 +329,9 @@ function hideLoading() {
 }
 
 /**
- * Soumet un fichier au serveur
+ * Soumet du code Faust au serveur
  */
-async function submitFile(file) {
-  // Lire le contenu du fichier
-  const code = await file.text();
-  const filename = file.name;
-
+async function submitCode(code, filename) {
   // Afficher l'état de chargement
   showLoading();
   hideError();
@@ -379,6 +379,65 @@ async function submitFile(file) {
   } finally {
     hideLoading();
   }
+}
+
+/**
+ * Soumet un fichier .dsp
+ */
+async function submitFile(file) {
+  const code = await file.text();
+  const filename = file.name;
+  await submitCode(code, filename);
+}
+
+function makeClipFilename() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(
+    now.getHours()
+  )}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `clip-${ts}.dsp`;
+}
+
+function isTextInputTarget(target) {
+  if (!(target instanceof Element)) return false;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
+  if (target instanceof HTMLSelectElement) return true;
+  return !!target.closest('[contenteditable="true"]');
+}
+
+function getCurrentViewIndex() {
+  if (!Array.isArray(state.views) || state.views.length === 0) return -1;
+  return state.views.findIndex((v) => v.id === state.currentView);
+}
+
+async function navigateViewByOffset(offset) {
+  if (!Array.isArray(state.views) || state.views.length === 0) return;
+  const currentIndex = getCurrentViewIndex();
+  if (currentIndex < 0) return;
+  const nextIndex = (currentIndex + offset + state.views.length) % state.views.length;
+  const nextView = state.views[nextIndex];
+  if (!nextView) return;
+  await switchView(nextView.id);
+}
+
+function ensurePasteSink() {
+  if (pasteSink) return pasteSink;
+  const sink = document.createElement('textarea');
+  sink.setAttribute('aria-hidden', 'true');
+  sink.tabIndex = -1;
+  sink.autocapitalize = 'off';
+  sink.autocomplete = 'off';
+  sink.style.position = 'fixed';
+  sink.style.left = '-10000px';
+  sink.style.top = '0';
+  sink.style.width = '1px';
+  sink.style.height = '1px';
+  sink.style.opacity = '0';
+  sink.style.pointerEvents = 'none';
+  document.body.appendChild(sink);
+  pasteSink = sink;
+  return sink;
 }
 
 function captureScrollLine() {
@@ -494,6 +553,12 @@ if (downloadBtn) {
     if (state.currentView === 'cpp') {
       url = `/api/${session.sha1}/download/cpp`;
       filename = `${base}.cpp`;
+    } else if (state.currentView === 'signals') {
+      url = `/api/${session.sha1}/download/signals`;
+      filename = `${base}-sig.dot`;
+    } else if (state.currentView === 'tasks') {
+      url = `/api/${session.sha1}/download/tasks`;
+      filename = `${base}.dsp.dot`;
     } else if (state.currentView === 'svg') {
       url = `/api/${session.sha1}/download/svg`;
       filename = `${base}-svg.zip`;
@@ -628,6 +693,40 @@ if (deleteSessionBtn) {
   });
 }
 
+if (refreshSessionBtn) {
+  refreshSessionBtn.addEventListener('click', async () => {
+    if (state.sessionIndex >= state.sessions.length || state.sessionIndex < 0) return;
+    const session = state.sessions[state.sessionIndex];
+    if (!session) return;
+
+    showLoading();
+    hideError();
+
+    try {
+      const response = await fetch(`/api/${session.sha1}/refresh`, { method: 'POST' });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Refresh failed');
+      }
+
+      await loadSessions();
+      refreshSessionIndex();
+      updateSessionNavigation();
+
+      if (result.errors && result.errors.trim()) {
+        showError(result.errors);
+      }
+
+      showInterface();
+      await renderCurrentView();
+    } catch (err) {
+      showError(`Error: ${err.message}`);
+    } finally {
+      hideLoading();
+    }
+  });
+}
+
 fileInput.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
   if (file) {
@@ -666,6 +765,55 @@ document.addEventListener('drop', (e) => {
     submitFile(file);
   } else if (file) {
     showError('Please drop a .dsp file');
+  }
+});
+
+// Paste plain text code directly as a new DSP session.
+window.addEventListener('paste', (e) => {
+  const target = e.target;
+  if (isTextInputTarget(target) && target !== pasteSink) return;
+  const text = e.clipboardData?.getData('text/plain') || '';
+  if (!text.trim()) return;
+  e.preventDefault();
+  submitCode(text, makeClipFilename());
+}, true);
+
+document.addEventListener('keydown', (e) => {
+  const isPasteShortcut = (e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'v' || e.key === 'V');
+  if (!isPasteShortcut) return;
+  if (isTextInputTarget(e.target)) return;
+  const sink = ensurePasteSink();
+  sink.value = '';
+  sink.focus();
+  sink.select();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (isTextInputTarget(e.target)) return;
+
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    navigateToPrevious();
+    return;
+  }
+
+  if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    navigateToNext();
+    return;
+  }
+
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    navigateViewByOffset(-1);
+    return;
+  }
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    navigateViewByOffset(1);
   }
 });
 

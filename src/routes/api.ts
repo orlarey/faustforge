@@ -16,6 +16,18 @@ import {
 export function createApiRouter(sessionManager: SessionManager, stateStore: StateStore): Router {
   const router = Router();
 
+  function clearSessionArtifacts(sessionPath: string): void {
+    const targets = ['generated.cpp', 'signals.dot', 'tasks.dot', 'svg', 'wasm', 'webapp'];
+    for (const relative of targets) {
+      const fullPath = path.join(sessionPath, relative);
+      try {
+        fs.rmSync(fullPath, { recursive: true, force: true });
+      } catch {
+        // Ignorer les erreurs de nettoyage
+      }
+    }
+  }
+
   async function zipDirectory(
     sessionPath: string,
     dirName: string,
@@ -100,12 +112,20 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
         const session = sessionManager.createSession(code, filename);
         const tempCpp = path.join(tempRoot, 'generated.cpp');
         const tempSvg = path.join(tempRoot, 'svg');
+        const tempSignalsDot = path.join(tempRoot, 'signals.dot');
+        const tempTasksDot = path.join(tempRoot, 'tasks.dot');
 
         if (fs.existsSync(tempCpp)) {
           fs.copyFileSync(tempCpp, path.join(session.path, 'generated.cpp'));
         }
         if (fs.existsSync(tempSvg)) {
           fs.cpSync(tempSvg, path.join(session.path, 'svg'), { recursive: true });
+        }
+        if (fs.existsSync(tempSignalsDot)) {
+          fs.copyFileSync(tempSignalsDot, path.join(session.path, 'signals.dot'));
+        }
+        if (fs.existsSync(tempTasksDot)) {
+          fs.copyFileSync(tempTasksDot, path.join(session.path, 'tasks.dot'));
         }
         fs.writeFileSync(path.join(session.path, 'errors.log'), result.errors || '', 'utf8');
         fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -257,6 +277,31 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return;
     }
     res.json({ sha1: state.sha1, ui: state.ui });
+  });
+
+  /**
+   * POST /:sha/refresh
+   * Régénère les artefacts de session à partir du code source existant
+   */
+  router.post('/:sha/refresh', async (req: Request, res: Response) => {
+    const { sha } = req.params;
+    const session = sessionManager.getSession(sha);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    try {
+      clearSessionArtifacts(session.path);
+      const result = await analyzeFaust(session.path, session.filename);
+      res.json({
+        sha1: session.sha1,
+        errors: result.errors
+      });
+    } catch (err) {
+      console.error('Error in /:sha/refresh:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
   });
 
   /**
@@ -449,6 +494,38 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
+   * GET /:sha/signals.dot
+   * Récupère le graphe de signaux DOT
+   */
+  router.get('/:sha/signals.dot', (req: Request, res: Response) => {
+    const { sha } = req.params;
+
+    const content = sessionManager.getFile(sha, 'signals.dot');
+    if (!content) {
+      res.status(404).json({ error: 'Signals dot not found' });
+      return;
+    }
+
+    res.type('text/plain').send(content);
+  });
+
+  /**
+   * GET /:sha/tasks.dot
+   * Récupère le graphe de tâches DOT
+   */
+  router.get('/:sha/tasks.dot', (req: Request, res: Response) => {
+    const { sha } = req.params;
+
+    const content = sessionManager.getFile(sha, 'tasks.dot');
+    if (!content) {
+      res.status(404).json({ error: 'Tasks dot not found' });
+      return;
+    }
+
+    res.type('text/plain').send(content);
+  });
+
+  /**
    * GET /:sha/compile/wasm
    * Déclenche la compilation WebAssembly
    */
@@ -603,6 +680,54 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
 
     const base = session.filename.replace(/\.dsp$/i, '') || 'session';
     res.download(result.zipPath, `${base}-svg.zip`);
+  });
+
+  /**
+   * GET /:sha/download/signals
+   * Télécharge le graphe de signaux DOT
+   */
+  router.get('/:sha/download/signals', (req: Request, res: Response) => {
+    const { sha } = req.params;
+    const session = sessionManager.getSession(sha);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const content = sessionManager.getFile(sha, 'signals.dot');
+    if (!content) {
+      res.status(404).json({ error: 'Signals dot not found' });
+      return;
+    }
+
+    const base = session.filename.replace(/\.dsp$/i, '') || 'session';
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', `attachment; filename="${base}-sig.dot"`);
+    res.send(content);
+  });
+
+  /**
+   * GET /:sha/download/tasks
+   * Télécharge le graphe de tâches DOT
+   */
+  router.get('/:sha/download/tasks', (req: Request, res: Response) => {
+    const { sha } = req.params;
+    const session = sessionManager.getSession(sha);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const content = sessionManager.getFile(sha, 'tasks.dot');
+    if (!content) {
+      res.status(404).json({ error: 'Tasks dot not found' });
+      return;
+    }
+
+    const base = session.filename.replace(/\.dsp$/i, '') || 'session';
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', `attachment; filename="${base}.dsp.dot"`);
+    res.send(content);
   });
 
   /**

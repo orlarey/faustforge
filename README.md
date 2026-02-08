@@ -153,6 +153,10 @@ Parameter behavior:
 - `button`: requires a full cycle (`1` then `0`) to retrigger correctly.
 - `checkbox`: toggles between `0` and `1`, value persists.
 
+Signals view:
+- `signals` displays the Faust signal graph rendered from `signals.dot` (`faust -sg`).
+- In `signals` view, Download exports `<name>-sig.dot`.
+
 ## Useful Docker Commands
 
 ```bash
