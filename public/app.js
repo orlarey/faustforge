@@ -47,7 +47,7 @@ let pasteSink = null;
  * Charge dynamiquement les modules de vue
  */
 async function loadViews() {
-  const viewModules = ['dsp', 'cpp', 'signals', 'tasks', 'svg', 'run'];
+  const viewModules = ['dsp', 'svg', 'run', 'cpp', 'tasks', 'signals'];
 
   for (const viewName of viewModules) {
     try {
