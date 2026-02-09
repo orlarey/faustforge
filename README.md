@@ -210,6 +210,18 @@ Run control tools:
 - `midi_note_on(note, velocity?)` -> send MIDI note-on
 - `midi_note_off(note)` -> send MIDI note-off
 - `midi_note_pulse(note, velocity?, holdMs?)` -> send note-on then note-off automatically
+- `midi_note_on_and_get_spectrum(note, velocity?, settleMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> note-on + spectrum-summary time series + max-hold aggregate
+- `midi_note_off_and_get_spectrum(note, settleMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> note-off + spectrum-summary time series + max-hold aggregate
+- `midi_note_pulse_and_get_spectrum(note, velocity?, holdMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> note-pulse + spectrum-summary time series + max-hold aggregate
+
+Faust library documentation tools:
+- The Docker image ships with a prebuilt Faust doc index generated from `faustwasm` stdlib (`/usr/share/faust/stdfaust.lib`).
+- No runtime fallback: MCP expects this prebuilt index to be present in the image.
+- `search_faust_lib(query, limit?, module?)` -> search symbols without loading full docs in context
+- `get_faust_symbol(symbol)` -> full symbol entry (summary, usage, params, test snippet, source)
+- `list_faust_module(module, limit?)` -> list symbols from one module (e.g. `delays`, `filters`)
+- `get_faust_examples(symbolOrModule, limit?)` -> retrieve test/example snippets
+- `explain_faust_symbol_for_goal(symbol, goal)` -> action-oriented guidance for a concrete DSP objective
 
 Spectrum behavior:
 - When audio is running in `run` view, the frontend pushes compact spectrum summaries to MCP state.

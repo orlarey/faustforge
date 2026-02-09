@@ -2,8 +2,17 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import * as z from 'zod/v4';
+import * as path from 'path';
+import { loadFaustDocIndexFromFile } from './faust-doc-index.mjs';
 
 const HTTP_BASE = process.env.FAUST_HTTP_URL || 'http://localhost:3000';
+const DEFAULT_DOC_INDEX_FILE_CANDIDATES = [
+  process.env.FAUST_DOC_INDEX_PATH,
+  '/app/dist/faust-doc-index.json',
+  path.resolve(process.cwd(), 'dist/faust-doc-index.json')
+].filter(Boolean);
+let faustDocCache = null;
+let faustDocPrebuiltLoadAttempted = false;
 
 function toResult(data) {
   return {
@@ -29,7 +38,7 @@ const ONBOARDING_GUIDE = {
     '3) get_run_ui() and get_run_params()',
     '4) For continuous params: set_run_param_and_get_spectrum(...)',
     '5) For transient buttons: trigger_button_and_get_spectrum(...)',
-    '6) For note events: midi_note_on/off/pulse(...)',
+    '6) For note events: prefer midi_note_*_and_get_spectrum(...)',
     '7) Compare aggregate.summary and iterate one parameter at a time'
   ],
   toolHints: {
@@ -45,8 +54,102 @@ const ONBOARDING_GUIDE = {
   policy: [
     'Do not optimize timbre while ignoring audioQuality.',
     'Flag severe clipping and click risk unless explicitly requested.'
+  ],
+  libraryDiscovery: [
+    'Use search_faust_lib(query) to find relevant functions without loading whole libraries.',
+    'Use get_faust_symbol(symbol) to retrieve usage, parameters, and test snippets.',
+    'Use list_faust_module(module) and get_faust_examples(symbolOrModule) for exploration.'
   ]
 };
+
+function rankSymbolMatch(symbol, queryLower) {
+  const q = queryLower;
+  if (symbol.qualifiedName.toLowerCase() === q) return 120;
+  if (symbol.name.toLowerCase() === q) return 110;
+  if (symbol.id.toLowerCase() === q) return 105;
+  let score = 0;
+  const haystacks = [
+    symbol.name,
+    symbol.qualifiedName,
+    symbol.summary || '',
+    symbol.source && symbol.source.file ? symbol.source.file : ''
+  ].map((s) => String(s).toLowerCase());
+  for (const h of haystacks) {
+    if (h.includes(q)) score += 20;
+  }
+  return score;
+}
+
+async function loadPrebuiltFaustDocIndex() {
+  for (const filePath of DEFAULT_DOC_INDEX_FILE_CANDIDATES) {
+    const loaded = await loadFaustDocIndexFromFile(filePath);
+    if (loaded) {
+      return loaded;
+    }
+  }
+  return null;
+}
+
+async function getFaustDocIndex() {
+  if (faustDocCache) return faustDocCache;
+  if (!faustDocPrebuiltLoadAttempted) {
+    faustDocPrebuiltLoadAttempted = true;
+    const prebuilt = await loadPrebuiltFaustDocIndex();
+    if (prebuilt) {
+      faustDocCache = prebuilt;
+      return faustDocCache;
+    }
+  }
+  throw new McpError(
+    ErrorCode.InvalidParams,
+    `Faust doc index not found. Expected one of: ${DEFAULT_DOC_INDEX_FILE_CANDIDATES.join(', ')}`
+  );
+}
+
+function findFaustSymbol(index, symbolInput) {
+  const key = String(symbolInput || '').trim().toLowerCase();
+  if (!key) return { symbol: null, alternatives: [] };
+  const exact = index.symbols.find((s) => {
+    const header = String(s.header || '').toLowerCase();
+    return (
+      s.name.toLowerCase() === key ||
+      s.id.toLowerCase() === key ||
+      s.qualifiedName.toLowerCase() === key ||
+      header === key ||
+      header.replace(/[`()]/g, '') === key.replace(/[`()]/g, '')
+    );
+  });
+  if (exact) return { symbol: exact, alternatives: [] };
+  const ranked = index.symbols
+    .map((s) => ({ s, score: rankSymbolMatch(s, key) }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score);
+  if (ranked.length === 0) return { symbol: null, alternatives: [] };
+  return {
+    symbol: ranked[0].s,
+    alternatives: ranked.slice(1, 6).map((x) => x.s)
+  };
+}
+
+function explainSymbolForGoal(symbol, goal) {
+  const goalText = String(goal || '').trim();
+  const params = Array.isArray(symbol.params) ? symbol.params : [];
+  const paramHint = params.length
+    ? `Key params: ${params.map((p) => `${p.name} (${p.description})`).join('; ')}`
+    : 'No explicit parameter notes found.';
+  const usage = symbol.usage ? `Usage: ${symbol.usage}` : 'Usage not documented.';
+  return {
+    symbol: symbol.qualifiedName,
+    goal: goalText,
+    recommendation: [
+      `Use ${symbol.qualifiedName} when it matches this goal: ${goalText || 'general DSP design'}.`,
+      symbol.summary || 'No summary found in comments.',
+      usage,
+      paramHint,
+      symbol.testCode ? 'A test snippet is available via get_faust_examples.' : 'No test snippet found.'
+    ].join(' ')
+  };
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -309,6 +412,169 @@ server.registerTool(
   },
   async () => {
     return toResult(ONBOARDING_GUIDE);
+  }
+);
+
+server.registerTool(
+  'search_faust_lib',
+  {
+    description: 'Search Faust library symbols by text query (name, qualified name, summary, file).',
+    inputSchema: {
+      query: z.string(),
+      limit: z.number().int().min(1).max(100).optional(),
+      module: z.string().optional()
+    }
+  },
+  async ({ query, limit, module }) => {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) {
+      throw new McpError(ErrorCode.InvalidParams, 'Missing query');
+    }
+    const max = typeof limit === 'number' ? limit : 10;
+    const mod = module ? String(module).trim().toLowerCase() : '';
+    const index = await getFaustDocIndex();
+    const ranked = index.symbols
+      .filter((s) => {
+        if (!mod) return true;
+        const sourceFile = (s.source && s.source.file ? s.source.file : '').toLowerCase();
+        const modName = sourceFile.replace(/\.lib$/i, '');
+        return modName === mod || sourceFile === `${mod}.lib` || s.qualifiedName.toLowerCase().startsWith(`${mod}.`);
+      })
+      .map((s) => ({ symbol: s, score: rankSymbolMatch(s, q) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, max)
+      .map((x) => ({
+        id: x.symbol.id,
+        name: x.symbol.name,
+        qualifiedName: x.symbol.qualifiedName,
+        summary: x.symbol.summary,
+        usage: x.symbol.usage,
+        source: x.symbol.source
+      }));
+    return toResult({ query, module: module || null, results: ranked });
+  }
+);
+
+server.registerTool(
+  'get_faust_symbol',
+  {
+    description: 'Get full documentation for a Faust symbol (usage, params, io, test snippet, source).',
+    inputSchema: {
+      symbol: z.string()
+    }
+  },
+  async ({ symbol }) => {
+    const index = await getFaustDocIndex();
+    const found = findFaustSymbol(index, symbol);
+    if (!found.symbol) {
+      throw new McpError(ErrorCode.InvalidParams, `Symbol not found: ${symbol}`);
+    }
+    return toResult({
+      symbol: found.symbol,
+      alternatives: found.alternatives.map((s) => ({
+        id: s.id,
+        qualifiedName: s.qualifiedName,
+        summary: s.summary
+      }))
+    });
+  }
+);
+
+server.registerTool(
+  'list_faust_module',
+  {
+    description: 'List symbols from one Faust library module (e.g. delays, filters, oscillators).',
+    inputSchema: {
+      module: z.string(),
+      limit: z.number().int().min(1).max(500).optional()
+    }
+  },
+  async ({ module, limit }) => {
+    const mod = String(module || '').trim().toLowerCase();
+    if (!mod) throw new McpError(ErrorCode.InvalidParams, 'Missing module');
+    const max = typeof limit === 'number' ? limit : 200;
+    const index = await getFaustDocIndex();
+    const lib = index.libraries.find((l) => {
+      const name = String(l.file || '').toLowerCase().replace(/\.lib$/i, '');
+      const aliases = Array.isArray(l.aliasHints) ? l.aliasHints.map((a) => String(a).toLowerCase()) : [];
+      return name === mod || aliases.includes(mod);
+    });
+    if (!lib) {
+      throw new McpError(ErrorCode.InvalidParams, `Module not found: ${module}`);
+    }
+    const symbols = (lib.symbols || []).slice(0, max).map((s) => ({
+      id: s.id,
+      qualifiedName: s.qualifiedName,
+      summary: s.summary,
+      usage: s.usage,
+      source: s.source
+    }));
+    return toResult({
+      module: mod,
+      file: lib.file,
+      aliasHints: lib.aliasHints || [],
+      symbols
+    });
+  }
+);
+
+server.registerTool(
+  'get_faust_examples',
+  {
+    description: 'Get example/test snippets from Faust docs for a symbol or module.',
+    inputSchema: {
+      symbolOrModule: z.string(),
+      limit: z.number().int().min(1).max(50).optional()
+    }
+  },
+  async ({ symbolOrModule, limit }) => {
+    const key = String(symbolOrModule || '').trim();
+    if (!key) throw new McpError(ErrorCode.InvalidParams, 'Missing symbolOrModule');
+    const max = typeof limit === 'number' ? limit : 10;
+    const index = await getFaustDocIndex();
+    const { symbol } = findFaustSymbol(index, key);
+    if (symbol) {
+      const examples = symbol.testCode
+        ? [{ symbol: symbol.qualifiedName, code: symbol.testCode, source: symbol.source }]
+        : [];
+      return toResult({ scope: 'symbol', query: key, examples });
+    }
+    const mod = key.toLowerCase();
+    const lib = index.libraries.find((l) => {
+      const name = String(l.file || '').toLowerCase().replace(/\.lib$/i, '');
+      const aliases = Array.isArray(l.aliasHints) ? l.aliasHints.map((a) => String(a).toLowerCase()) : [];
+      return name === mod || aliases.includes(mod);
+    });
+    if (!lib) {
+      throw new McpError(ErrorCode.InvalidParams, `No symbol/module found: ${key}`);
+    }
+    const examples = [];
+    for (const s of lib.symbols || []) {
+      if (!s.testCode) continue;
+      examples.push({ symbol: s.qualifiedName, code: s.testCode, source: s.source });
+      if (examples.length >= max) break;
+    }
+    return toResult({ scope: 'module', query: key, file: lib.file, examples });
+  }
+);
+
+server.registerTool(
+  'explain_faust_symbol_for_goal',
+  {
+    description: 'Return an action-oriented explanation of a Faust symbol for a concrete DSP goal.',
+    inputSchema: {
+      symbol: z.string(),
+      goal: z.string()
+    }
+  },
+  async ({ symbol, goal }) => {
+    const index = await getFaustDocIndex();
+    const found = findFaustSymbol(index, symbol);
+    if (!found.symbol) {
+      throw new McpError(ErrorCode.InvalidParams, `Symbol not found: ${symbol}`);
+    }
+    return toResult(explainSymbolForGoal(found.symbol, goal));
   }
 );
 
@@ -626,6 +892,157 @@ server.registerTool(
       sha1: result.sha1,
       midi: result.runMidi,
       sent: { action: 'pulse', note, velocity: safeVelocity, holdMs: safeHoldMs }
+    });
+  }
+);
+
+server.registerTool(
+  'midi_note_on_and_get_spectrum',
+  {
+    description: [
+      'Send MIDI note-on, wait briefly, then capture a compact spectrum-summary series.',
+      'Returns a max-hold aggregate summary over the capture window.'
+    ].join('\n'),
+    inputSchema: {
+      note: z.number().int().min(0).max(127),
+      velocity: z.number().min(0).max(1).optional(),
+      settleMs: z.number().int().min(0).max(5000).optional(),
+      captureMs: z.number().int().min(50).max(10000).optional(),
+      sampleEveryMs: z.number().int().min(40).max(500).optional(),
+      maxFrames: z.number().int().min(1).max(20).optional()
+    }
+  },
+  async ({ note, velocity, settleMs, captureMs, sampleEveryMs, maxFrames }) => {
+    const safeVelocity = typeof velocity === 'number' ? velocity : 0.8;
+    const settle = typeof settleMs === 'number' ? settleMs : 120;
+    const windowMs = typeof captureMs === 'number' ? captureMs : 300;
+    const pollMs = typeof sampleEveryMs === 'number' ? sampleEveryMs : 80;
+    const frameCap = typeof maxFrames === 'number' ? maxFrames : 10;
+    await ensureRunView().catch(() => {});
+    await ensureAudioUnlocked();
+    await runTransport('start').catch(() => {});
+    const midiResult = await sendMidi('on', note, safeVelocity);
+    if (settle > 0) {
+      await sleep(settle);
+    }
+    const series = await collectSpectrumSummarySeries(windowMs, pollMs, frameCap);
+    if (!series || series.length === 0) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'No spectrum summary captured. Ensure Run view is active and audio is running.'
+      );
+    }
+    const aggregateSummary = aggregateSpectrumSeries(series);
+    return toResult({
+      sent: { action: 'on', note, velocity: safeVelocity },
+      settleMs: settle,
+      captureMs: windowMs,
+      sampleEveryMs: pollMs,
+      midi: midiResult.runMidi,
+      series,
+      aggregate: {
+        mode: 'max_hold',
+        summary: aggregateSummary
+      }
+    });
+  }
+);
+
+server.registerTool(
+  'midi_note_off_and_get_spectrum',
+  {
+    description: [
+      'Send MIDI note-off, wait briefly, then capture a compact spectrum-summary series.',
+      'Useful to detect release clicks/pops.'
+    ].join('\n'),
+    inputSchema: {
+      note: z.number().int().min(0).max(127),
+      settleMs: z.number().int().min(0).max(5000).optional(),
+      captureMs: z.number().int().min(50).max(10000).optional(),
+      sampleEveryMs: z.number().int().min(40).max(500).optional(),
+      maxFrames: z.number().int().min(1).max(20).optional()
+    }
+  },
+  async ({ note, settleMs, captureMs, sampleEveryMs, maxFrames }) => {
+    const settle = typeof settleMs === 'number' ? settleMs : 80;
+    const windowMs = typeof captureMs === 'number' ? captureMs : 300;
+    const pollMs = typeof sampleEveryMs === 'number' ? sampleEveryMs : 80;
+    const frameCap = typeof maxFrames === 'number' ? maxFrames : 10;
+    await ensureRunView().catch(() => {});
+    await ensureAudioUnlocked();
+    await runTransport('start').catch(() => {});
+    const midiResult = await sendMidi('off', note);
+    if (settle > 0) {
+      await sleep(settle);
+    }
+    const series = await collectSpectrumSummarySeries(windowMs, pollMs, frameCap);
+    if (!series || series.length === 0) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'No spectrum summary captured. Ensure Run view is active and audio is running.'
+      );
+    }
+    const aggregateSummary = aggregateSpectrumSeries(series);
+    return toResult({
+      sent: { action: 'off', note },
+      settleMs: settle,
+      captureMs: windowMs,
+      sampleEveryMs: pollMs,
+      midi: midiResult.runMidi,
+      series,
+      aggregate: {
+        mode: 'max_hold',
+        summary: aggregateSummary
+      }
+    });
+  }
+);
+
+server.registerTool(
+  'midi_note_pulse_and_get_spectrum',
+  {
+    description: [
+      'Send MIDI note pulse (on then off) and capture a compact spectrum-summary series.',
+      'Recommended for deterministic one-shot polyphonic tests.'
+    ].join('\n'),
+    inputSchema: {
+      note: z.number().int().min(0).max(127),
+      velocity: z.number().min(0).max(1).optional(),
+      holdMs: z.number().int().min(1).max(5000).optional(),
+      captureMs: z.number().int().min(50).max(10000).optional(),
+      sampleEveryMs: z.number().int().min(40).max(500).optional(),
+      maxFrames: z.number().int().min(1).max(20).optional()
+    }
+  },
+  async ({ note, velocity, holdMs, captureMs, sampleEveryMs, maxFrames }) => {
+    const safeVelocity = typeof velocity === 'number' ? velocity : 0.8;
+    const safeHoldMs = typeof holdMs === 'number' ? holdMs : 120;
+    const windowMs = typeof captureMs === 'number' ? captureMs : 400;
+    const pollMs = typeof sampleEveryMs === 'number' ? sampleEveryMs : 80;
+    const frameCap = typeof maxFrames === 'number' ? maxFrames : 10;
+    await ensureRunView().catch(() => {});
+    await ensureAudioUnlocked();
+    await runTransport('start').catch(() => {});
+    const capturePromise = collectSpectrumSummarySeries(windowMs, pollMs, frameCap);
+    const midiResult = await sendMidi('pulse', note, safeVelocity, safeHoldMs);
+    const series = await capturePromise;
+    if (!series || series.length === 0) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'No spectrum summary captured. Ensure Run view is active and audio is running.'
+      );
+    }
+    const aggregateSummary = aggregateSpectrumSeries(series);
+    return toResult({
+      sent: { action: 'pulse', note, velocity: safeVelocity, holdMs: safeHoldMs },
+      captureMs: windowMs,
+      sampleEveryMs: pollMs,
+      midi: midiResult.runMidi,
+      series,
+      aggregate: {
+        mode: 'max_hold',
+        summary: aggregateSummary
+      }
     });
   }
 );

@@ -9,8 +9,11 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY public ./public
 COPY mcp.mjs ./mcp.mjs
+COPY faust-doc-index.mjs ./faust-doc-index.mjs
+COPY scripts/build-faust-doc-index.mjs ./scripts/build-faust-doc-index.mjs
 
 RUN npm run build
+RUN node ./scripts/build-faust-doc-index.mjs ./dist/faust-doc-index.json
 
 FROM docker:27-cli AS dockercli
 
@@ -31,6 +34,7 @@ RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public
 COPY --from=build /app/mcp.mjs ./mcp.mjs
+COPY --from=build /app/faust-doc-index.mjs ./faust-doc-index.mjs
 
 RUN mkdir -p /app/sessions
 
