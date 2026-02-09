@@ -66,6 +66,66 @@ docker run -d `
 
 Then open `http://localhost:3000`.
 
+## User Manual
+
+### 1) Open faustforge
+
+Open `http://localhost:3000`.
+
+![Home](docs/screenshots/01-home.png)
+
+### 2) Create a session
+
+You can:
+
+- Drop a `.dsp` file into the page.
+- Paste Faust code directly (`Ctrl+V` / `Cmd+V`), which creates a `clip-<timestamp>.dsp` session.
+
+![Create session](docs/screenshots/02-create-session.png)
+
+### 3) Navigate sessions and views
+
+- Sessions: `◀` / `▶`
+- Views menu order: `dsp`, `svg`, `run`, `cpp`, `tasks`, `signals`
+- Keyboard shortcuts:
+  - `←` / `→`: previous/next session
+  - `↑` / `↓`: previous/next view
+
+![Navigation](docs/screenshots/03-navigation.png)
+
+### 4) Work with source and generated outputs
+
+- `dsp`: original Faust source
+- `cpp`: generated C++
+- `svg`: Faust diagram SVG
+
+![Code and diagram](docs/screenshots/04-code-svg.png)
+
+### 5) Run audio
+
+Go to `run` view to:
+
+- start/stop audio
+- interact with controls
+- use MCP tools against the same active session
+
+![Run view](docs/screenshots/05-run.png)
+
+### 6) Analyze graphs
+
+- `tasks`: DOT graph from `faust -vec -tg`
+- `signals`: DOT graph from `faust -sg`
+
+Use `DOT` button to show source.  
+If SVG rendering fails (large graph), faustforge shows an error banner and switches to DOT-focused fallback.
+
+![Tasks and signals](docs/screenshots/06-graphs.png)
+
+### 7) Refresh and download
+
+- `↻` refresh: regenerate session artifacts from current source
+- `Download` exports content for the current view
+
 ## Build Locally (Maintainers)
 
 ### 1) Build the local image
@@ -81,6 +141,7 @@ make run
 ```
 
 The helper script uses:
+
 - `PORT` (default `3000`)
 - `NAME` (default `faustforge`)
 - `HOST_SESSIONS_DIR` (default `$HOME/.faustforge/sessions`)
