@@ -185,19 +185,23 @@ What the AI can do:
 
 Typical workflow:
 ```text
-1) set_view("run")
-2) get_run_ui()
-3) run_transport("start")
-4) set_run_param(...)
-5) trigger_button_and_get_spectrum(...)
-6) analyze series and aggregate.summary
-7) iterate on DSP or parameters
+1) get_onboarding_guide()
+2) set_view("run")
+3) get_run_ui()
+4) run_transport("start")
+5) set_run_param(...)
+6) set_run_param_and_get_spectrum(...)
+7) trigger_button_and_get_spectrum(...)
+8) analyze series and aggregate.summary
+9) iterate on DSP or parameters
 ```
 
 Run control tools:
+- `get_onboarding_guide()` -> best-practice workflow + thresholds for autonomous AI behavior
 - `get_run_ui` -> return Faust UI JSON (parameter paths)
 - `get_run_params` -> return current run parameters by path
 - `set_run_param(path, value)` -> set one continuous parameter
+- `set_run_param_and_get_spectrum(path, value, settleMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> set parameter + capture spectrum-summary time series + max-hold aggregate
 - `run_transport(action)` -> `start`, `stop`, or `toggle`
 - `trigger_button(path, holdMs?)` -> safe press/release cycle
 - `trigger_button_and_get_spectrum(path, holdMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> trigger + spectrum-summary time series + max-hold aggregate
@@ -208,6 +212,19 @@ Spectrum behavior:
 - `get_spectrum` returns the latest spectrum summary independently of current view.
 - Capture starts at tool call time (only fresh snapshots are aggregated).
 - Legacy fallback remains available when summary is not present.
+- `spectrum_summary_v1` can include `audioQuality` feedback for temporal defects:
+  - `peakDbFSQ`, `clipSampleCount`, `clipRatioQ`, `dcOffsetQ`, `clickCount`, `clickScoreQ`.
+
+Audio quality quick interpretation (practical thresholds):
+- `clipRatioQ > 1` (per-mille) -> clipping is likely audible.
+- `clipRatioQ > 5` -> severe clipping.
+- `clickScoreQ > 20` -> potential click/pop artifacts.
+- `clickScoreQ > 40` -> strong click risk (usually clearly audible).
+- `peakDbFSQ >= -1` with high `clipRatioQ` -> limiter/saturation region.
+
+Browser note:
+- On page open, faustforge requires an explicit `Enable Audio` click to unlock WebAudio in this tab.
+- MCP audio tools (`run_transport start/toggle`, trigger/capture tools) are blocked until this unlock step is done.
 
 Parameter behavior:
 - `hslider`, `vslider`, `nentry`: value persists until changed.

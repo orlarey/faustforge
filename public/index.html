@@ -49,6 +49,15 @@
     <span id="footer-version">v0.1</span>
   </footer>
 
+  <div id="audio-gate" class="audio-gate hidden" role="dialog" aria-modal="true" aria-labelledby="audio-gate-title">
+    <div class="audio-gate-card">
+      <h2 id="audio-gate-title">Enable Audio</h2>
+      <p>Click once to unlock WebAudio for this browser tab before using MCP run controls.</p>
+      <button id="audio-gate-button" class="primary-btn">Enable Audio</button>
+      <div id="audio-gate-status" class="audio-gate-status hidden"></div>
+    </div>
+  </div>
+
   <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -44,6 +44,14 @@ Type MCP/HTTP recommandé: `spectrum_summary_v1`
     "flatnessQ": 12,
     "crestDbQ": 11
   },
+  "audioQuality": {
+    "peakDbFSQ": -1,
+    "clipSampleCount": 24,
+    "clipRatioQ": 3,
+    "dcOffsetQ": 2,
+    "clickCount": 5,
+    "clickScoreQ": 18
+  },
   "delta": {
     "rmsDbQ": -2,
     "centroidHz": 210,
@@ -74,6 +82,7 @@ Exemple de payload:
     "bandsDbQ": [-72, -68, -63],
     "peaks": [{ "hz": 110, "dbQ": -18, "q": 12.4 }],
     "features": { "rmsDbQ": -14, "centroidHz": 1850, "rolloff95Hz": 6200, "flatnessQ": 12, "crestDbQ": 11 },
+    "audioQuality": { "peakDbFSQ": -1, "clipSampleCount": 24, "clipRatioQ": 3, "dcOffsetQ": 2, "clickCount": 5, "clickScoreQ": 18 },
     "delta": { "rmsDbQ": -2, "centroidHz": 210, "rolloff95Hz": 480, "flatnessQ": -3, "crestDbQ": 1 }
   }
 }
@@ -141,6 +150,60 @@ Règles:
 - Si aucune frame n'est capturée: erreur explicite (`Run view active + audio running`).
 - Les snapshots de la série suivent le même schéma `spectrum_summary_v1`.
 
+### `set_run_param_and_get_spectrum`
+
+Objectif: modifier un paramètre continu puis mesurer l'impact spectral avec une capture atomique.
+
+Entrée:
+
+```json
+{
+  "path": "/instrument/cutoff",
+  "value": 2400,
+  "settleMs": 120,
+  "captureMs": 500,
+  "sampleEveryMs": 80,
+  "maxFrames": 10
+}
+```
+
+- `path`: chemin du paramètre continu (obligatoire).
+- `value`: nouvelle valeur du paramètre (obligatoire).
+- `settleMs`: délai après écriture avant capture (défaut: `120`, plage `0..5000`).
+- `captureMs`: fenêtre totale d'observation (défaut: `300`, plage `50..10000`).
+- `sampleEveryMs`: période d'échantillonnage des résumés (défaut: `80`, min `40`, max `500`).
+- `maxFrames`: limite de frames retournées (défaut: `10`, max `20`).
+
+Sortie:
+
+```json
+{
+  "path": "/instrument/cutoff",
+  "value": 2400,
+  "settleMs": 120,
+  "captureMs": 500,
+  "sampleEveryMs": 80,
+  "series": [
+    {
+      "tMs": 0,
+      "summary": { "type": "spectrum_summary_v1", "capturedAt": 1738900000000 }
+    }
+  ],
+  "aggregate": {
+    "mode": "max_hold",
+    "summary": { "type": "spectrum_summary_v1", "capturedAt": 1738900000500 }
+  }
+}
+```
+
+Règles:
+
+- force la vue `run` et démarre l'audio si nécessaire.
+- applique d'abord `set_run_param(path, value)`.
+- attend `settleMs`, puis lance la capture.
+- `series` contient des snapshots ordonnés par `tMs` croissant.
+- `aggregate.mode="max_hold"` est calculé sur toute la fenêtre `captureMs`.
+
 ## Champs
 
 - `type`: version de format (`spectrum_summary_v1`).
@@ -149,7 +212,51 @@ Règles:
 - `bandsDbQ`: énergie par bande log-spacée, quantifiée en dB (entiers).
 - `peaks`: `K` pics dominants (fréquence, niveau quantifié, facteur de qualité).
 - `features`: descripteurs globaux robustes.
+- `audioQuality` (optionnel): indicateurs temporels de qualité audio (saturation/clicks).
 - `delta`: variation vs dernier snapshot publié.
+
+## Extension qualité audio (clicks + saturation)
+
+Le bloc `audioQuality` est optionnel dans `spectrum_summary_v1` (extension backward-compatible).
+
+```json
+{
+  "audioQuality": {
+    "peakDbFSQ": -1,
+    "clipSampleCount": 24,
+    "clipRatioQ": 3,
+    "dcOffsetQ": 2,
+    "clickCount": 5,
+    "clickScoreQ": 18
+  }
+}
+```
+
+Définitions:
+
+- `peakDbFSQ`:
+  - pic temporel de la fenêtre en dBFS quantifié (pas 1 dB, `0` = plein échelle).
+- `clipSampleCount`:
+  - nombre d’échantillons au-dessus d’un seuil d’écrêtage (`abs(x) >= 0.999` recommandé).
+- `clipRatioQ`:
+  - proportion de samples écrêtés en pour-mille (`round(1000 * clipSampleCount / N)`).
+- `dcOffsetQ`:
+  - offset DC absolu quantifié (`round(abs(mean(x)) * 1000)`).
+- `clickCount`:
+  - nombre d’événements impulsionnels détectés sur la fenêtre.
+- `clickScoreQ`:
+  - score global de risque de click (0..100 recommandé).
+
+### Heuristique de click (recommandée)
+
+- Calculer la dérivée absolue `d[n] = abs(x[n] - x[n-1])`.
+- Définir un seuil élevé (ex: `d[n] > 0.35`) + condition d’isolement local.
+- Compter les impulsions courtes comme `clickCount`.
+- Dériver `clickScoreQ` (normalisation sur la taille de fenêtre, bornée à `[0..100]`).
+
+But:
+- permettre à l’IA de détecter objectivement des défauts temporels audibles
+  même quand le spectre moyen semble acceptable.
 
 ## Quantification et compression
 

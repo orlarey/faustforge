@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-export type View = 'dsp' | 'cpp' | 'svg' | 'run';
+export type View = 'dsp' | 'cpp' | 'svg' | 'run' | 'signals' | 'tasks';
 
 export interface SpectrumSummaryPeak {
   hz: number;
@@ -25,6 +25,15 @@ export interface SpectrumSummaryDelta {
   crestDbQ: number;
 }
 
+export interface SpectrumAudioQuality {
+  peakDbFSQ: number;
+  clipSampleCount: number;
+  clipRatioQ: number;
+  dcOffsetQ: number;
+  clickCount: number;
+  clickScoreQ: number;
+}
+
 export interface SpectrumSummary {
   type: 'spectrum_summary_v1';
   capturedAt: number;
@@ -39,6 +48,7 @@ export interface SpectrumSummary {
   bandsDbQ: number[];
   peaks: SpectrumSummaryPeak[];
   features: SpectrumSummaryFeatures;
+  audioQuality?: SpectrumAudioQuality;
   delta?: SpectrumSummaryDelta;
 }
 
@@ -46,6 +56,7 @@ export interface AppState {
   sha1: string | null;
   filename: string | null;
   view: View;
+  audioUnlocked?: boolean;
   ui?: unknown;
   runParams?: Record<string, number>;
   runParamsUpdatedAt?: number;
@@ -89,12 +100,16 @@ export class StateStore {
       if (!parsed.updatedAt) {
         parsed.updatedAt = Date.now();
       }
+      if (parsed.audioUnlocked !== true) {
+        parsed.audioUnlocked = false;
+      }
       return parsed;
     } catch {
       return {
         sha1: null,
         filename: null,
         view: 'dsp',
+        audioUnlocked: false,
         updatedAt: Date.now()
       };
     }
@@ -105,6 +120,7 @@ export class StateStore {
       sha1: state.sha1 ?? null,
       filename: state.filename ?? null,
       view: state.view ?? 'dsp',
+      audioUnlocked: state.audioUnlocked === true,
       ui: state.ui,
       runParams: state.runParams,
       runParamsUpdatedAt: state.runParamsUpdatedAt,

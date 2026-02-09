@@ -446,6 +446,9 @@ Résultat :
   - content : dernier contenu spectral poussé par la vue run
     - priorité : SpectrumSummary (spectrum_summary_v1)
     - fallback de transition : SpectrumSnapshot legacy (FFT brut)
+  - peut inclure `audioQuality` (extension v1 optionnelle) :
+    - saturation/clipping (`peakDbFSQ`, `clipSampleCount`, `clipRatioQ`)
+    - défauts temporels (`clickCount`, `clickScoreQ`)
 ```
 
 ### MCP‑11 : get_run_ui (structure UI run)
@@ -491,6 +494,35 @@ Comportement par type de paramètre :
   - hslider, vslider, nentry : valeur persistante jusqu’au prochain changement
   - button : nécessite un cycle 1 puis 0 pour retrigger correctement
   - checkbox : toggle 0/1 persistant
+```
+
+### MCP‑13bis : set_run_param_and_get_spectrum
+
+```text
+mcp.set_run_param_and_get_spectrum :
+  (path: Path, value: Number, settleMs?: Int, captureMs?: Int, sampleEveryMs?: Int, maxFrames?: Int)
+  → {
+      path: Path,
+      value: Number,
+      settleMs: Int,
+      captureMs: Int,
+      sampleEveryMs: Int,
+      series: List<{ tMs: Int, summary: SpectrumSummary }>,
+      aggregate: { mode: \"max_hold\", summary: SpectrumSummary }
+    }
+
+Préconditions :
+  - Une session active en état partagé
+  - path pointe un paramètre continu (slider/nentry/checkbox)
+
+Effets :
+  - Force la vue partagée sur \"run\" avant capture
+  - Démarre l’audio si nécessaire
+  - Applique set_run_param(path, value)
+  - Attend settleMs (défaut 120 ms) pour laisser le DSP se stabiliser
+  - Capture une série temporelle de SpectrumSummary sur captureMs
+  - Retourne aussi un agrégat max-hold sur la fenêtre
+  - La fenêtre de capture commence après l’attente settleMs
 ```
 
 ### MCP‑14 : run_transport (start/stop/toggle audio)
@@ -575,9 +607,10 @@ Boucle recommandée pour interaction IA :
 2) get_run_ui()              -- découverte des paths
 3) run_transport(\"start\")   -- audio ON
 4) set_run_param(...)        -- réglages continus
-5) trigger_button_and_get_spectrum(path, holdMs, captureMs)
-6) analyser series + aggregate.summary
-7) itérer les paramètres puis recapturer
+5) set_run_param_and_get_spectrum(path, value, settleMs, captureMs)
+6) trigger_button_and_get_spectrum(path, holdMs, captureMs)
+7) analyser series + aggregate.summary
+8) itérer les paramètres puis recapturer
 ```
 
 Contraintes temporelles :
@@ -585,6 +618,7 @@ Contraintes temporelles :
 - runParamsUpdatedAt versionne les paramètres partagés pour éviter les rollbacks en cas d'interactions UI/IA concurrentes.
 - Les triggers boutons passent par runTrigger (événement avec nonce).
 - Le contenu spectral est poussé périodiquement par la vue run (summary prioritaire), puis agrégé côté MCP pendant `captureMs`.
+- Le résumé spectral peut inclure un feedback qualité audio (`audioQuality`) pour détecter clicks et saturation.
 
 ### Note : pas de suppression via MCP
 

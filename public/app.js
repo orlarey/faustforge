@@ -12,6 +12,7 @@ const state = {
   sessionIndex: -1,    // -1 = pas initialisé, sessions.length = session vide
   dragCounter: 0,      // Compteur pour gérer dragenter/dragleave
   runStateBySha: {},   // État Run par session (params)
+  audioUnlocked: false,
   runGlobal: {
     audioRunning: false,
     scope: null,
@@ -40,6 +41,9 @@ const loadingOverlay = document.getElementById('loading-overlay');
 const footerVersion = document.getElementById('footer-version');
 const deleteSessionBtn = document.getElementById('delete-session');
 const refreshSessionBtn = document.getElementById('refresh-session');
+const audioGate = document.getElementById('audio-gate');
+const audioGateButton = document.getElementById('audio-gate-button');
+const audioGateStatus = document.getElementById('audio-gate-status');
 let lastStateTs = 0;
 let pasteSink = null;
 
@@ -337,6 +341,49 @@ function hideLoading() {
   loadingOverlay.classList.add('hidden');
 }
 
+function showAudioGate(message = '') {
+  if (!audioGate) return;
+  audioGate.classList.remove('hidden');
+  if (audioGateStatus) {
+    if (message) {
+      audioGateStatus.textContent = message;
+      audioGateStatus.classList.remove('hidden');
+    } else {
+      audioGateStatus.textContent = '';
+      audioGateStatus.classList.add('hidden');
+    }
+  }
+}
+
+function hideAudioGate() {
+  if (!audioGate) return;
+  audioGate.classList.add('hidden');
+  if (audioGateStatus) {
+    audioGateStatus.textContent = '';
+    audioGateStatus.classList.add('hidden');
+  }
+}
+
+async function unlockAudioGate() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) {
+    throw new Error('WebAudio is not available in this browser.');
+  }
+  const ctx = new Ctx();
+  try {
+    await ctx.resume();
+    if (ctx.state !== 'running') {
+      throw new Error('Audio unlock failed. Please click again.');
+    }
+  } finally {
+    try {
+      await ctx.close();
+    } catch {
+      // ignore
+    }
+  }
+}
+
 /**
  * Soumet du code Faust au serveur
  */
@@ -623,6 +670,14 @@ async function pollState() {
     if (remote.updatedAt <= lastStateTs) return;
 
     lastStateTs = remote.updatedAt;
+    if (typeof remote.audioUnlocked === 'boolean') {
+      state.audioUnlocked = remote.audioUnlocked;
+      if (state.audioUnlocked) {
+        hideAudioGate();
+      } else {
+        showAudioGate();
+      }
+    }
 
     if (remote.view && remote.view !== state.currentView) {
       await switchView(remote.view);
@@ -736,6 +791,30 @@ if (refreshSessionBtn) {
   });
 }
 
+if (audioGateButton) {
+  audioGateButton.addEventListener('click', async () => {
+    if (state.audioUnlocked) {
+      hideAudioGate();
+      return;
+    }
+    audioGateButton.disabled = true;
+    showAudioGate();
+    try {
+      await unlockAudioGate();
+      state.audioUnlocked = true;
+      await syncState({ audioUnlocked: true });
+      hideAudioGate();
+      hideError();
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      showAudioGate(message);
+      showError(`Audio unlock required: ${message}`);
+    } finally {
+      audioGateButton.disabled = false;
+    }
+  });
+}
+
 fileInput.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
   if (file) {
@@ -835,9 +914,11 @@ async function init() {
   state.sessionIndex = state.sessions.length;
   updateSessionNavigation();
   hideInterface();
+  showAudioGate();
+  state.audioUnlocked = false;
 
-  // Sync initial state
-  syncState({ sha1: null, view: state.currentView });
+  // Sync initial state and require explicit audio unlock per opened tab.
+  syncState({ sha1: null, view: state.currentView, audioUnlocked: false });
 
   // Charger la version Faust pour le footer
   if (footerVersion) {

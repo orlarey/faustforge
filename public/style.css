@@ -386,6 +386,44 @@ footer {
   font-size: 1rem;
 }
 
+.audio-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(10, 10, 10, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.audio-gate-card {
+  width: min(520px, 100%);
+  background: #1b1b1b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 1.1rem 1rem;
+  text-align: center;
+}
+
+.audio-gate-card h2 {
+  color: #f0f0f0;
+  font-size: 1.05rem;
+  margin-bottom: 0.45rem;
+}
+
+.audio-gate-card p {
+  color: #b8b8b8;
+  font-size: 0.88rem;
+  margin-bottom: 0.8rem;
+}
+
+.audio-gate-status {
+  margin-top: 0.55rem;
+  font-size: 0.8rem;
+  color: #ff7a7a;
+}
+
 /* Vue SVG */
 .svg-view {
   display: flex;
@@ -742,6 +780,11 @@ footer {
 .run-note {
   font-size: 0.75rem;
   color: #666;
+}
+
+.run-note.run-note-locked {
+  color: #ff5b5b;
+  font-weight: 700;
 }
 
 .run-midi-source {

@@ -27,6 +27,7 @@ let uiReleaseGuardHandler = null;
 let emitRunStateFn = null;
 let lastSpectrumSentAt = 0;
 let lastSpectrumSummary = null;
+let lastAudioQuality = null;
 let polyVoices = 0;
 let midiTargets = null;
 let activeMidiNote = null;
@@ -57,6 +58,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   runViewEnteredAt = Date.now();
   lastAppliedRemoteRunParamsUpdatedAt = 0;
   lastSpectrumSummary = null;
+  lastAudioQuality = null;
 
   container.innerHTML = `
     <div class="run-view">
@@ -150,6 +152,26 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   const scopeSlope = container.querySelector('#scope-slope');
   const scopeThreshold = container.querySelector('#scope-threshold');
   const scopeHoldoff = container.querySelector('#scope-holdoff');
+  const noteEl = container.querySelector('.run-note');
+  let audioLocked = false;
+
+  function updateRunNote() {
+    if (!noteEl) return;
+    if (audioLocked) {
+      noteEl.textContent = 'Audio Locked';
+      noteEl.classList.add('run-note-locked');
+      return;
+    }
+    noteEl.textContent = 'FaustWASM';
+    noteEl.classList.remove('run-note-locked');
+  }
+
+  function setAudioLocked(locked) {
+    audioLocked = !!locked;
+    updateRunNote();
+  }
+
+  updateRunNote();
 
   scopeState = createScopeState(scopeCanvas);
   applyRunState(runState, {
@@ -302,6 +324,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       }
       applyParamValues();
       await resumeAudioContext();
+      setAudioLocked(false);
       startAudioOutput();
       startParamPolling();
 
@@ -310,9 +333,15 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       emitRunState();
     } catch (err) {
       console.error('Run view error:', err);
+      const message = err && err.message ? err.message : String(err);
+      const isLocked =
+        typeof message === 'string' &&
+        message.toLowerCase().includes('audio start blocked by browser policy');
+      if (isLocked) {
+        setAudioLocked(true);
+      }
       cleanupAudio();
       statusEl.textContent = 'Error';
-      const message = err && err.message ? err.message : String(err);
       const stack = err && err.stack ? err.stack : '';
       controlsContent.innerHTML = `
         <div class="error">Error: ${message}</div>
@@ -1105,7 +1134,8 @@ function sendSpectrumSnapshot(scope, data, meta) {
     capturedAt: now,
     fmin: meta.fmin,
     fmax: meta.fmax,
-    floorDb
+    floorDb,
+    audioQuality: meta.audioQuality
   });
   if (summary) {
     lastSpectrumSummary = summary;
@@ -1166,6 +1196,7 @@ function buildSpectrumSummary(scope, data, meta) {
     bandsDbQ,
     peaks,
     features,
+    audioQuality: meta.audioQuality || undefined,
     delta
   };
 }
@@ -1251,6 +1282,64 @@ function computeSpectrumFeatures(data, sampleRate, fmax, floorDb) {
     rolloff95Hz: Math.round(rolloff95Hz),
     flatnessQ: Math.round(Math.max(0, Math.min(1, flatness)) * 100),
     crestDbQ: Math.round(maxDb - rmsDb)
+  };
+}
+
+function computeAudioQuality(samples) {
+  if (!samples || samples.length < 2) {
+    return {
+      peakDbFSQ: -120,
+      clipSampleCount: 0,
+      clipRatioQ: 0,
+      dcOffsetQ: 0,
+      clickCount: 0,
+      clickScoreQ: 0
+    };
+  }
+
+  const clipThreshold = 0.999;
+  const clickDerivThreshold = 0.35;
+  const clickRefractory = 8;
+  let maxAbs = 0;
+  let sum = 0;
+  let clipSampleCount = 0;
+  let clickCount = 0;
+  let lastClickIndex = -clickRefractory;
+  let maxDeriv = 0;
+
+  for (let i = 0; i < samples.length; i++) {
+    const x = Number.isFinite(samples[i]) ? samples[i] : 0;
+    const ax = Math.abs(x);
+    if (ax > maxAbs) maxAbs = ax;
+    if (ax >= clipThreshold) clipSampleCount += 1;
+    sum += x;
+    if (i === 0) continue;
+    const d = Math.abs(x - samples[i - 1]);
+    if (d > maxDeriv) maxDeriv = d;
+    if (d > clickDerivThreshold && i - lastClickIndex >= clickRefractory) {
+      clickCount += 1;
+      lastClickIndex = i;
+    }
+  }
+
+  const n = samples.length;
+  const mean = sum / n;
+  const peakDbFS = maxAbs > 1e-6 ? 20 * Math.log10(maxAbs) : -120;
+  const clipRatioQ = Math.round((1000 * clipSampleCount) / n);
+  const dcOffsetQ = Math.round(Math.abs(mean) * 1000);
+  const clickDensity = (clickCount / Math.max(1, n / 64)) * 100;
+  const clickScoreQ = Math.max(
+    0,
+    Math.min(100, Math.round(clickDensity + Math.max(0, maxDeriv - 0.25) * 120 + clipRatioQ * 0.5))
+  );
+
+  return {
+    peakDbFSQ: Math.round(Math.max(-120, Math.min(0, peakDbFS))),
+    clipSampleCount,
+    clipRatioQ,
+    dcOffsetQ,
+    clickCount,
+    clickScoreQ
   };
 }
 
@@ -1467,11 +1556,12 @@ function setupScope(context, node, scope) {
   const freqBuffer = new Float32Array(analyserNode.frequencyBinCount);
 
   const draw = () => {
+    analyserNode.getFloatTimeDomainData(buffer);
+    lastAudioQuality = computeAudioQuality(buffer);
     if (scope.view === 'freq') {
       analyserNode.getFloatFrequencyData(freqBuffer);
       drawSpectrum(scope, freqBuffer);
     } else {
-      analyserNode.getFloatTimeDomainData(buffer);
       scope.sampleCounter += buffer.length;
       const window = findTriggeredWindow(buffer, scope);
       if (window) {
@@ -1516,11 +1606,12 @@ function stopAudioOutput() {
 async function resumeAudioContext() {
   if (!audioContext) return;
   if (audioContext.state === 'suspended') {
-    try {
-      await audioContext.resume();
-    } catch {
-      // ignore
-    }
+    await audioContext.resume();
+  }
+  if (audioContext.state !== 'running') {
+    throw new Error(
+      'Audio start blocked by browser policy. Click "Start Audio" once in Run view to unlock audio.'
+    );
   }
 }
 
@@ -1704,7 +1795,8 @@ function drawSpectrum(scope, data) {
       scale: linear ? 'linear' : 'log',
       fmin,
       fmax,
-      floorDb
+      floorDb,
+      audioQuality: lastAudioQuality || undefined
     });
   }
 

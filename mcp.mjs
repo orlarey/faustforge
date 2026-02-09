@@ -12,6 +12,35 @@ function toResult(data) {
   };
 }
 
+const ONBOARDING_GUIDE = {
+  version: 1,
+  goals: [
+    'Design and iterate Faust DSP',
+    'Control run parameters safely',
+    'Measure spectral impact and audio quality'
+  ],
+  prerequisites: [
+    'If audio tools fail with "Audio is locked", ask the user to click "Enable Audio" once in Faustforge UI.'
+  ],
+  workflow: [
+    '1) set_view("run")',
+    '2) get_run_ui() and get_run_params()',
+    '3) For continuous params: set_run_param_and_get_spectrum(...)',
+    '4) For transient buttons: trigger_button_and_get_spectrum(...)',
+    '5) Compare aggregate.summary and iterate one parameter at a time'
+  ],
+  qualityThresholds: {
+    clipRatioQ_warn: 1,
+    clipRatioQ_severe: 5,
+    clickScoreQ_warn: 20,
+    clickScoreQ_severe: 40
+  },
+  policy: [
+    'Do not optimize timbre while ignoring audioQuality.',
+    'Flag severe clipping and click risk unless explicitly requested.'
+  ]
+};
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -38,6 +67,15 @@ async function ensureRunView() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ view: 'run' })
   });
+}
+
+async function ensureAudioUnlocked() {
+  const state = await requestJson('/api/state');
+  if (state && state.audioUnlocked === true) return;
+  throw new McpError(
+    ErrorCode.InvalidParams,
+    'Audio is locked. Open Faustforge UI and click "Enable Audio" once.'
+  );
 }
 
 async function triggerRunButton(path, holdMs) {
@@ -94,6 +132,12 @@ function aggregateSpectrumSeries(series) {
   let rolloff95HzSum = 0;
   let flatnessQ = 0;
   let crestDbQ = -120;
+  let peakDbFSQ = -120;
+  let clipSampleCount = 0;
+  let clipRatioQ = 0;
+  let dcOffsetQ = 0;
+  let clickCount = 0;
+  let clickScoreQ = 0;
 
   for (const sample of series) {
     const summary = sample.summary;
@@ -122,6 +166,14 @@ function aggregateSpectrumSeries(series) {
     if (Number.isFinite(f.rolloff95Hz)) rolloff95HzSum += f.rolloff95Hz;
     if (Number.isFinite(f.flatnessQ) && f.flatnessQ > flatnessQ) flatnessQ = f.flatnessQ;
     if (Number.isFinite(f.crestDbQ) && f.crestDbQ > crestDbQ) crestDbQ = f.crestDbQ;
+
+    const q = summary.audioQuality || {};
+    if (Number.isFinite(q.peakDbFSQ) && q.peakDbFSQ > peakDbFSQ) peakDbFSQ = q.peakDbFSQ;
+    if (Number.isFinite(q.clipSampleCount)) clipSampleCount += Math.max(0, Math.round(q.clipSampleCount));
+    if (Number.isFinite(q.clipRatioQ) && q.clipRatioQ > clipRatioQ) clipRatioQ = q.clipRatioQ;
+    if (Number.isFinite(q.dcOffsetQ) && q.dcOffsetQ > dcOffsetQ) dcOffsetQ = q.dcOffsetQ;
+    if (Number.isFinite(q.clickCount)) clickCount += Math.max(0, Math.round(q.clickCount));
+    if (Number.isFinite(q.clickScoreQ) && q.clickScoreQ > clickScoreQ) clickScoreQ = q.clickScoreQ;
   }
 
   const peaks = Array.from(peakMap.values())
@@ -153,6 +205,14 @@ function aggregateSpectrumSeries(series) {
     bandsDbQ,
     peaks,
     features,
+    audioQuality: {
+      peakDbFSQ: Math.round(peakDbFSQ),
+      clipSampleCount: Math.round(clipSampleCount),
+      clipRatioQ: Math.round(clipRatioQ),
+      dcOffsetQ: Math.round(dcOffsetQ),
+      clickCount: Math.round(clickCount),
+      clickScoreQ: Math.round(clickScoreQ)
+    },
     delta
   };
 }
@@ -214,9 +274,22 @@ const server = new McpServer({
 });
 
 server.registerTool(
+  'get_onboarding_guide',
+  {
+    description:
+      'Return best-practice workflow and thresholds so an AI client can operate Faustforge autonomously.',
+    inputSchema: {}
+  },
+  async () => {
+    return toResult(ONBOARDING_GUIDE);
+  }
+);
+
+server.registerTool(
   'submit',
   {
-    description: 'Submit Faust code (equivalent to dropping a .dsp file).',
+    description:
+      'Submit Faust code (equivalent to dropping a .dsp file). If persisted, it becomes the active shared session.',
     inputSchema: {
       code: z.string(),
       filename: z.string().optional(),
@@ -239,6 +312,17 @@ server.registerTool(
         persistOnSuccessOnly: shouldPersistOnSuccessOnly
       })
     });
+
+    // Keep UI and MCP in sync: when submission produced/persisted a session,
+    // make it the active shared session so web UI switches immediately.
+    if (result && result.sha1 && result.persisted !== false) {
+      await requestJson('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sha1: result.sha1 })
+      });
+    }
+
     return toResult({
       sha1: result.sha1,
       errors: result.errors || '',
@@ -353,7 +437,11 @@ server.registerTool(
 server.registerTool(
   'get_spectrum',
   {
-    description: 'Get the latest spectrum summary (independent of current view).',
+    description: [
+      'Get latest spectrum summary (independent of current view).',
+      'May include audioQuality feedback: clipping and click risk.',
+      'Practical thresholds: clipRatioQ>1 warn, >5 severe; clickScoreQ>20 warn, >40 severe.'
+    ].join('\n'),
     inputSchema: {}
   },
   async () => {
@@ -421,6 +509,58 @@ server.registerTool(
 );
 
 server.registerTool(
+  'set_run_param_and_get_spectrum',
+  {
+    description: [
+      'Set one run parameter, wait briefly, then capture a compact spectrum-summary series.',
+      'Returns a max-hold aggregate summary over the capture window.',
+      'Recommended for objective A/B parameter impact measurement.'
+    ].join('\n'),
+    inputSchema: {
+      path: z.string(),
+      value: z.number(),
+      settleMs: z.number().int().min(0).max(5000).optional(),
+      captureMs: z.number().int().min(50).max(10000).optional(),
+      sampleEveryMs: z.number().int().min(40).max(500).optional(),
+      maxFrames: z.number().int().min(1).max(20).optional()
+    }
+  },
+  async ({ path, value, settleMs, captureMs, sampleEveryMs, maxFrames }) => {
+    const settle = typeof settleMs === 'number' ? settleMs : 120;
+    const windowMs = typeof captureMs === 'number' ? captureMs : 300;
+    const pollMs = typeof sampleEveryMs === 'number' ? sampleEveryMs : 80;
+    const frameCap = typeof maxFrames === 'number' ? maxFrames : 10;
+    await ensureRunView().catch(() => {});
+    await ensureAudioUnlocked();
+    await runTransport('start').catch(() => {});
+    await setRunParam(path, value);
+    if (settle > 0) {
+      await sleep(settle);
+    }
+    const series = await collectSpectrumSummarySeries(windowMs, pollMs, frameCap);
+    if (!series || series.length === 0) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'No spectrum summary captured. Ensure Run view is active and audio is running.'
+      );
+    }
+    const aggregateSummary = aggregateSpectrumSeries(series);
+    return toResult({
+      path,
+      value,
+      settleMs: settle,
+      captureMs: windowMs,
+      sampleEveryMs: pollMs,
+      series,
+      aggregate: {
+        mode: 'max_hold',
+        summary: aggregateSummary
+      }
+    });
+  }
+);
+
+server.registerTool(
   'trigger_button',
   {
     description: [
@@ -436,6 +576,7 @@ server.registerTool(
   async ({ path, holdMs }) => {
     const duration = typeof holdMs === 'number' ? holdMs : 80;
     await ensureRunView().catch(() => {});
+    await ensureAudioUnlocked();
     await runTransport('start').catch(() => {});
     await triggerRunButton(path, duration);
     return toResult({ path, holdMs: duration, triggered: true });
@@ -447,7 +588,8 @@ server.registerTool(
   {
     description: [
       'Trigger a button and capture a time series of compact spectrum summaries.',
-      'Also returns a max-hold aggregate summary over the capture window.'
+      'Also returns a max-hold aggregate summary over the capture window.',
+      'Use for transient/percussive analysis.'
     ].join('\n'),
     inputSchema: {
       path: z.string(),
@@ -463,6 +605,7 @@ server.registerTool(
     const pollMs = typeof sampleEveryMs === 'number' ? sampleEveryMs : 80;
     const frameCap = typeof maxFrames === 'number' ? maxFrames : 10;
     await ensureRunView().catch(() => {});
+    await ensureAudioUnlocked();
     await runTransport('start').catch(() => {});
     const capturePromise = collectSpectrumSummarySeries(windowMs, pollMs, frameCap);
     await triggerRunButton(path, duration);
@@ -491,13 +634,17 @@ server.registerTool(
 server.registerTool(
   'run_transport',
   {
-    description: 'Control run transport: start, stop, or toggle audio.',
+    description:
+      'Control run transport: start, stop, or toggle audio. Start/toggle require audio unlocked by one UI click ("Enable Audio").',
     inputSchema: {
       action: z.enum(['start', 'stop', 'toggle'])
     }
   },
   async ({ action }) => {
     await ensureRunView().catch(() => {});
+    if (action === 'start' || action === 'toggle') {
+      await ensureAudioUnlocked();
+    }
     const result = await requestJson('/api/run/transport', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -635,6 +782,7 @@ server.registerTool(
     }
   },
   async ({ duration_ms, format }) => {
+    await ensureAudioUnlocked();
     const state = await requestJson('/api/state');
     const content = getLatestSpectrumContent(state);
     if (!content) {

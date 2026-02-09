@@ -2,7 +2,6 @@ import { Router, Request, Response } from 'express';
 import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
-import * as os from 'os';
 import { SessionManager } from '../sessions';
 import { StateStore, View, AppState } from '../state';
 import {
@@ -15,6 +14,7 @@ import {
 
 export function createApiRouter(sessionManager: SessionManager, stateStore: StateStore): Router {
   const router = Router();
+  const sessionsBaseDir = process.env.SESSIONS_DIR || '/app/sessions';
 
   function clearSessionArtifacts(sessionPath: string): void {
     const targets = ['generated.cpp', 'signals.dot', 'tasks.dot', 'svg', 'wasm', 'webapp'];
@@ -95,8 +95,11 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       }
 
       if (persistOnlyIfSuccess) {
-        // Analyze in a temporary workspace. Persist only on success.
-        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'faust-submit-'));
+        // Analyze in a temporary workspace under sessions dir.
+        // This is required when running inside Docker with host docker.sock:
+        // the mounted source path must exist on host side too.
+        const tempBase = fs.existsSync(sessionsBaseDir) ? sessionsBaseDir : osTmpFallback();
+        const tempRoot = fs.mkdtempSync(path.join(tempBase, 'faust-submit-'));
         const sourceDir = path.join(tempRoot, 'sourcecode');
         fs.mkdirSync(sourceDir, { recursive: true });
         fs.writeFileSync(path.join(sourceDir, filename), code, 'utf8');
@@ -203,15 +206,26 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   /**
    * POST /state
    * Met à jour l'état courant (session + vue)
-   * Body: { sha1?: string|null, view?: View, ui?: any, runParams?: any, runTransport?: any, runTrigger?: any, spectrum?: any, spectrumSummary?: any }
+   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runParams?: any, runTransport?: any, runTrigger?: any, spectrum?: any, spectrumSummary?: any }
    */
   router.post('/state', (req: Request, res: Response) => {
-    const { sha1, view, ui, runParams, runTransport, runTrigger, spectrum, spectrumSummary } =
+    const {
+      sha1,
+      view,
+      audioUnlocked,
+      ui,
+      runParams,
+      runTransport,
+      runTrigger,
+      spectrum,
+      spectrumSummary
+    } =
       req.body || {};
     const partial: {
       sha1?: string | null;
       filename?: string | null;
       view?: View;
+      audioUnlocked?: boolean;
       ui?: unknown;
       runParams?: AppState['runParams'];
       runParamsUpdatedAt?: number;
@@ -223,6 +237,9 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
 
     if (typeof view === 'string') {
       partial.view = view as View;
+    }
+    if (typeof audioUnlocked === 'boolean') {
+      partial.audioUnlocked = audioUnlocked;
     }
 
     if (sha1 === null) {
@@ -775,4 +792,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   return router;
+}
+
+function osTmpFallback(): string {
+  return '/tmp';
 }
