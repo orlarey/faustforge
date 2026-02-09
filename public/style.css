@@ -795,24 +795,7 @@ footer {
   gap: 0.35rem;
 }
 
-.run-zoom {
-  font-size: 0.8rem;
-  color: #b0b0b0;
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
 .run-midi-source select {
-  background: #1a1a1a;
-  color: #b0b0b0;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
-  padding: 0.1rem 0.35rem;
-  font-size: 0.8rem;
-}
-
-.run-zoom select {
   background: #1a1a1a;
   color: #b0b0b0;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1028,12 +1011,40 @@ footer {
 .run-controls-content {
   position: relative;
   z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   width: 100%;
   height: 100%;
   max-width: 100%;
+}
+
+.run-controls-split {
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) minmax(280px, 0.9fr);
+  gap: 0.75rem;
+  width: 100%;
+  height: 100%;
+  min-height: 280px;
+}
+
+.run-controls-pane {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #1a1a1a;
+  overflow: hidden;
+  position: relative;
+}
+
+.run-controls-pane-classic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.run-controls-pane-orbit {
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
 }
 
 .run-ui-zoom-wrap {
@@ -1042,9 +1053,78 @@ footer {
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .run-ui-zoom-stage {
   transform-origin: top left;
+}
+
+.orbit-wrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.regular-wrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.regular-header,
+.orbit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.8rem;
+  color: #c9c9c9;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.panel-zoom {
+  font-size: 0.75rem;
+  color: #a9a9a9;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.panel-zoom select {
+  background: #1a1a1a;
+  color: #b0b0b0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.75rem;
+}
+
+.regular-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.orbit-canvas {
+  display: block;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.orbit-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+@media (max-width: 980px) {
+  .run-controls-split {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(260px, 1fr) minmax(240px, 1fr);
+  }
 }

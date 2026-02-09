@@ -18,6 +18,9 @@ let faustUIInstance = null;
 let currentUiRoot = null;
 let controlsBg = null;
 let controlsContent = null;
+let controlsSplit = null;
+let controlsClassicPane = null;
+let controlsOrbitPane = null;
 let paramValues = {};
 let uiParamPaths = [];
 let uiButtonPaths = new Set();
@@ -38,6 +41,7 @@ let midiOnly = true;
 let paramPollId = null;
 let outputParamHandlerAttached = false;
 let uiZoom = 'auto';
+let orbitZoom = '100';
 let uiZoomWrap = null;
 let uiZoomStage = null;
 let uiResizeObserver = null;
@@ -49,6 +53,19 @@ let lastAppliedMidiNonce = 0;
 let isSwitchingPolyphony = false;
 let runViewEnteredAt = 0;
 let lastAppliedRemoteRunParamsUpdatedAt = 0;
+let lastAppliedRemoteOrbitNonce = 0;
+let orbitCanvas = null;
+let orbitBody = null;
+let orbitCtx = null;
+let orbitState = null;
+let orbitPointer = null;
+let orbitNeedsDraw = false;
+let orbitRafId = null;
+let orbitResizeObserver = null;
+let lastRunOrbitSentAt = 0;
+let pendingOrbitUi = null;
+let orbitBaseWidth = 0;
+let orbitBaseHeight = 0;
 
 export function getName() {
   return 'Run';
@@ -81,16 +98,6 @@ export async function render(container, { sha, runState, onRunStateChange }) {
         </label>
         <label class="run-midi-source">MIDI
           <select id="midi-input"></select>
-        </label>
-        <label class="run-zoom">Zoom
-          <select id="run-zoom">
-            <option value="auto">Auto</option>
-            <option value="50">50%</option>
-            <option value="75">75%</option>
-            <option value="100">100%</option>
-            <option value="125">125%</option>
-            <option value="150">150%</option>
-          </select>
         </label>
         <div class="spacer"></div>
         <span class="run-note">FaustWASM</span>
@@ -144,7 +151,6 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   const statusEl = container.querySelector('.run-status');
   const modeSelect = container.querySelector('#run-mode');
   const midiInputSelect = container.querySelector('#midi-input');
-  const zoomSelect = container.querySelector('#run-zoom');
   const controlsEl = container.querySelector('#run-controls');
   const midiEl = container.querySelector('#run-midi');
   const scopeCanvas = container.querySelector('#scope-canvas');
@@ -184,8 +190,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     scopeThreshold,
     scopeHoldoff,
     modeSelect,
-    midiInputSelect,
-    zoomSelect
+    midiInputSelect
   });
   // Keep control labels aligned with effective internal scope state.
   scopeView.value = scopeState.view;
@@ -195,6 +200,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   scopeThreshold.value = String(scopeState.threshold);
   scopeHoldoff.value = String(scopeState.holdoffMs);
   paramValues = runState && runState.params ? { ...runState.params } : {};
+  pendingOrbitUi = runState && runState.orbitUi ? runState.orbitUi : null;
   const emitRunState = () => {
     if (typeof onRunStateChange === 'function') {
       onRunStateChange(getState());
@@ -312,12 +318,6 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     emitRunState();
   });
 
-  zoomSelect.addEventListener('change', () => {
-    uiZoom = zoomSelect.value;
-    applyUiZoom();
-    emitRunState();
-  });
-
   modeSelect.addEventListener('change', async () => {
     const value = modeSelect.value;
     const voices = value === 'mono' ? 0 : Math.max(1, parseInt(value, 10));
@@ -419,7 +419,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     if (toggleBtn.disabled) return;
     const target = event.target;
     const inUiRoot = !!(currentUiRoot && target instanceof Element && currentUiRoot.contains(target));
-    if (inUiRoot) {
+    const inOrbit = !!(controlsOrbitPane && target instanceof Element && controlsOrbitPane.contains(target));
+    if (inUiRoot || inOrbit) {
       return;
     }
     if (audioRunning) {
@@ -537,6 +538,17 @@ export async function render(container, { sha, runState, onRunStateChange }) {
           await executeRemoteMidi(cmd);
         }
       }
+
+      if (remote.runOrbitUi && typeof remote.runOrbitUi === 'object') {
+        const nonce =
+          typeof remote.runOrbitUi.nonce === 'number'
+            ? remote.runOrbitUi.nonce
+            : 0;
+        if (nonce > lastAppliedRemoteOrbitNonce) {
+          lastAppliedRemoteOrbitNonce = nonce;
+          applyRemoteOrbitUi(remote.runOrbitUi);
+        }
+      }
     } catch {
       // ignore sync errors
     }
@@ -550,6 +562,7 @@ export function getState() {
     polyVoices,
     midiSource,
     uiZoom,
+    orbitZoom,
     scope: {
       view: scopeState.view,
       spectrumScale: scopeState.spectrumScale,
@@ -558,7 +571,8 @@ export function getState() {
       threshold: scopeState.threshold,
       holdoffMs: scopeState.holdoffMs
     },
-    params: { ...paramValues }
+    params: { ...paramValues },
+    orbitUi: buildRunOrbitSnapshot(false)
   };
 }
 
@@ -613,13 +627,17 @@ async function compileAndRenderUI(container, sha, voices = 0) {
   const prepared = prepareControlsContainer(container);
   controlsBg = prepared.bg;
   controlsContent = prepared.content;
+  controlsSplit = prepared.split;
+  controlsClassicPane = prepared.classicPane;
+  controlsOrbitPane = prepared.orbitPane;
   renderControls(controlsContent, compiledUI);
   updateUiRoot(controlsContent);
 }
 
 function renderControls(container, ui) {
   if (Array.isArray(ui) && ui.length > 0) {
-    renderFaustUi(container, ui);
+    renderFaustUi(controlsClassicPane || container, ui);
+    renderOrbitUi(controlsOrbitPane || container, ui);
     return;
   }
 
@@ -731,11 +749,38 @@ function renderMidiKeyboard(container, ui, handlers) {
 
 async function renderFaustUi(container, ui) {
   ensureFaustUiCss();
-  container.innerHTML = '<div class="info">Loading UI...</div>';
+  container.innerHTML = `
+    <div class="regular-wrap">
+      <div class="regular-header">
+        <span>Regular UI</span>
+        <label class="panel-zoom">Zoom
+          <select class="regular-zoom">
+            <option value="auto">Auto</option>
+            <option value="50">50%</option>
+            <option value="75">75%</option>
+            <option value="100">100%</option>
+            <option value="125">125%</option>
+            <option value="150">150%</option>
+          </select>
+        </label>
+      </div>
+      <div class="regular-content"><div class="info">Loading UI...</div></div>
+    </div>
+  `;
+  const regularContent = container.querySelector('.regular-content') || container;
+  const regularZoomSelect = container.querySelector('.regular-zoom');
+  if (regularZoomSelect) {
+    regularZoomSelect.value = uiZoom;
+    regularZoomSelect.addEventListener('change', () => {
+      uiZoom = regularZoomSelect.value;
+      applyUiZoom();
+      if (emitRunStateFn) emitRunStateFn();
+    });
+  }
 
   try {
     const { FaustUI } = await import('../vendor/faust-ui/index.js');
-    container.innerHTML = '';
+    regularContent.innerHTML = '';
     const zoomWrap = document.createElement('div');
     zoomWrap.className = 'run-ui-zoom-wrap';
     const stage = document.createElement('div');
@@ -744,7 +789,7 @@ async function renderFaustUi(container, ui) {
     uiRoot.className = 'faust-ui-root';
     stage.appendChild(uiRoot);
     zoomWrap.appendChild(stage);
-    container.appendChild(zoomWrap);
+    regularContent.appendChild(zoomWrap);
     uiZoomWrap = zoomWrap;
     uiZoomStage = stage;
     currentUiRoot = uiRoot;
@@ -771,6 +816,7 @@ async function renderFaustUi(container, ui) {
           }
         }
         sendRunParamsSnapshot(forceSnapshot);
+        syncOrbitFromParams();
         if (emitRunStateFn) emitRunStateFn();
       } catch {
         // ignore
@@ -784,9 +830,500 @@ async function renderFaustUi(container, ui) {
     applyUiZoom();
   } catch (err) {
     console.error('Faust UI render error:', err);
-    container.innerHTML = '<div class="error">Failed to load Faust UI.</div>';
-    updateUiRoot(container);
+    regularContent.innerHTML = '<div class="error">Failed to load Faust UI.</div>';
+    updateUiRoot(regularContent);
   }
+}
+
+function renderOrbitUi(container, ui) {
+  if (!container) return;
+  container.innerHTML = `
+    <div class="orbit-wrap">
+      <div class="orbit-header">
+        <span>Orbit UI</span>
+        <label class="panel-zoom">Zoom
+          <select class="orbit-zoom">
+            <option value="75">75%</option>
+            <option value="100">100%</option>
+            <option value="125">125%</option>
+            <option value="150">150%</option>
+            <option value="200">200%</option>
+          </select>
+        </label>
+      </div>
+      <div class="orbit-body">
+        <canvas class="orbit-canvas"></canvas>
+      </div>
+    </div>
+  `;
+  const orbitZoomSelect = container.querySelector('.orbit-zoom');
+  if (orbitZoomSelect) {
+    if (![...orbitZoomSelect.options].some((o) => o.value === orbitZoom)) {
+      orbitZoom = '100';
+    }
+    orbitZoomSelect.value = orbitZoom;
+    orbitZoomSelect.addEventListener('change', () => {
+      orbitZoom = orbitZoomSelect.value;
+      resizeOrbitCanvas();
+      scheduleOrbitDraw();
+      if (emitRunStateFn) emitRunStateFn();
+    });
+  }
+  orbitBody = container.querySelector('.orbit-body');
+  orbitCanvas = container.querySelector('.orbit-canvas');
+  if (!orbitCanvas) return;
+  orbitCtx = orbitCanvas.getContext('2d');
+  setupOrbitCanvasResize();
+  const sliders = collectOrbitSliders(ui);
+  initOrbitState(sliders, pendingOrbitUi);
+  installOrbitPointerHandlers();
+  syncOrbitFromParams();
+  drawOrbitNow();
+  sendRunOrbitSnapshot(true);
+}
+
+function collectOrbitSliders(ui) {
+  if (!Array.isArray(ui)) return [];
+  const sliders = [];
+  const walk = (node) => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (Array.isArray(node.items)) node.items.forEach(walk);
+    const type = node.type;
+    const path = node.address || node.path;
+    if (!path) return;
+    if (type !== 'hslider' && type !== 'vslider' && type !== 'nentry') return;
+    const min = Number.isFinite(node.min) ? Number(node.min) : 0;
+    const max = Number.isFinite(node.max) ? Number(node.max) : 1;
+    if (max <= min) return;
+    sliders.push({
+      path,
+      label: String(node.label || path.split('/').filter(Boolean).pop() || path),
+      min,
+      max,
+      step: Number.isFinite(node.step) ? Number(node.step) : 0,
+      color: colorFromPath(path)
+    });
+  };
+  walk(ui);
+  return sliders;
+}
+
+function colorFromPath(path) {
+  let hash = 0;
+  for (let i = 0; i < path.length; i++) {
+    hash = ((hash << 5) - hash + path.charCodeAt(i)) | 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue} 68% 62%)`;
+}
+
+function setupOrbitCanvasResize() {
+  teardownOrbitCanvasResize();
+  if (!orbitCanvas) return;
+  orbitResizeObserver = new ResizeObserver(() => {
+    resizeOrbitCanvas();
+    if (orbitState) {
+      orbitState.width = orbitBaseWidth || orbitState.width;
+      orbitState.height = orbitBaseHeight || orbitState.height;
+      orbitState.center.x = clamp(orbitState.center.x, 0, orbitState.width);
+      orbitState.center.y = clamp(orbitState.center.y, 0, orbitState.height);
+      ensureOrbitRadii();
+      constrainOrbitPositions();
+      scheduleOrbitDraw();
+    }
+  });
+  orbitResizeObserver.observe(orbitCanvas);
+  resizeOrbitCanvas();
+}
+
+function teardownOrbitCanvasResize() {
+  if (orbitResizeObserver) {
+    orbitResizeObserver.disconnect();
+    orbitResizeObserver = null;
+  }
+}
+
+function resizeOrbitCanvas() {
+  if (!orbitCanvas || !orbitCtx || !orbitBody) return;
+  const dpr = window.devicePixelRatio || 1;
+  const baseWidth = Math.max(1, orbitBody.clientWidth || 1);
+  const baseHeight = Math.max(1, orbitBody.clientHeight || 1);
+  orbitBaseWidth = baseWidth;
+  orbitBaseHeight = baseHeight;
+  const parsed = parseInt(orbitZoom, 10);
+  const scale = Number.isFinite(parsed) ? clamp(parsed / 100, 0.5, 3) : 1;
+  const cssWidth = Math.max(1, Math.round(baseWidth * scale));
+  const cssHeight = Math.max(1, Math.round(baseHeight * scale));
+  orbitCanvas.style.width = `${cssWidth}px`;
+  orbitCanvas.style.height = `${cssHeight}px`;
+  orbitCanvas.width = Math.round(cssWidth * dpr);
+  orbitCanvas.height = Math.round(cssHeight * dpr);
+  orbitCtx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+}
+
+function initOrbitState(sliders, persisted) {
+  if (!orbitCanvas) return;
+  const width = Math.max(1, orbitBaseWidth || orbitCanvas.clientWidth || 1);
+  const height = Math.max(1, orbitBaseHeight || orbitCanvas.clientHeight || 1);
+  const defaultOuter = Math.max(60, Math.min(width, height) * 0.36);
+  const defaultInner = Math.max(14, defaultOuter * 0.18);
+  const center = persisted && persisted.center
+    ? { x: Number(persisted.center.x) || width / 2, y: Number(persisted.center.y) || height / 2 }
+    : { x: width / 2, y: height / 2 };
+  orbitState = {
+    width,
+    height,
+    center: {
+      x: clamp(center.x, 0, width),
+      y: clamp(center.y, 0, height)
+    },
+    innerRadius:
+      persisted && Number.isFinite(persisted.innerRadius)
+        ? Math.max(8, Number(persisted.innerRadius))
+        : defaultInner,
+    outerRadius:
+      persisted && Number.isFinite(persisted.outerRadius)
+        ? Math.max(defaultInner + 10, Number(persisted.outerRadius))
+        : defaultOuter,
+    sliders,
+    positions: {}
+  };
+  ensureOrbitRadii();
+
+  const persistedPositions =
+    persisted && persisted.positions && typeof persisted.positions === 'object'
+      ? persisted.positions
+      : {};
+
+  const count = Math.max(1, sliders.length);
+  sliders.forEach((slider, index) => {
+    const p = persistedPositions[slider.path];
+    if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+      orbitState.positions[slider.path] = {
+        x: clamp(Number(p.x), 0, orbitState.width),
+        y: clamp(Number(p.y), 0, orbitState.height)
+      };
+      return;
+    }
+    const angle = (index / count) * Math.PI * 2 - Math.PI / 2;
+    orbitState.positions[slider.path] = {
+      x: orbitState.center.x + Math.cos(angle) * orbitState.outerRadius,
+      y: orbitState.center.y + Math.sin(angle) * orbitState.outerRadius
+    };
+  });
+  constrainOrbitPositions();
+}
+
+function ensureOrbitRadii() {
+  if (!orbitState) return;
+  const maxOuter = Math.max(40, Math.min(orbitState.width, orbitState.height) * 0.47);
+  orbitState.outerRadius = clamp(orbitState.outerRadius, 30, maxOuter);
+  orbitState.innerRadius = clamp(orbitState.innerRadius, 8, orbitState.outerRadius - 6);
+}
+
+function installOrbitPointerHandlers() {
+  if (!orbitCanvas) return;
+  orbitCanvas.onpointerdown = (event) => {
+    if (!orbitState) return;
+    const p = orbitPointerPosition(event);
+    const hit = hitTestOrbit(p.x, p.y);
+    if (!hit) return;
+    event.preventDefault();
+    orbitCanvas.setPointerCapture(event.pointerId);
+    orbitPointer = {
+      pointerId: event.pointerId,
+      mode: hit.mode,
+      path: hit.path || null
+    };
+  };
+  orbitCanvas.onpointermove = (event) => {
+    if (!orbitState || !orbitPointer) return;
+    if (event.pointerId !== orbitPointer.pointerId) return;
+    const p = orbitPointerPosition(event);
+    if (orbitPointer.mode === 'slider' && orbitPointer.path) {
+      const nextPos = {
+        x: clamp(p.x, 0, orbitState.width),
+        y: clamp(p.y, 0, orbitState.height)
+      };
+      orbitState.positions[orbitPointer.path] = nextPos;
+      applyOrbitValueForPath(orbitPointer.path);
+      scheduleOrbitDraw();
+      sendRunOrbitSnapshot();
+      return;
+    }
+    if (orbitPointer.mode === 'center') {
+      orbitState.center.x = clamp(p.x, 0, orbitState.width);
+      orbitState.center.y = clamp(p.y, 0, orbitState.height);
+      applyOrbitValuesForAll();
+      scheduleOrbitDraw();
+      sendRunOrbitSnapshot();
+    }
+  };
+  orbitCanvas.onpointerup = (event) => {
+    if (!orbitPointer || event.pointerId !== orbitPointer.pointerId) return;
+    orbitPointer = null;
+    sendRunOrbitSnapshot(true);
+  };
+  orbitCanvas.onpointercancel = () => {
+    orbitPointer = null;
+  };
+}
+
+function orbitPointerPosition(event) {
+  const rect = orbitCanvas.getBoundingClientRect();
+  const parsed = parseInt(orbitZoom, 10);
+  const scale = Number.isFinite(parsed) ? clamp(parsed / 100, 0.5, 3) : 1;
+  const rawX = event.clientX - rect.left;
+  const rawY = event.clientY - rect.top;
+  return {
+    x: rawX / scale,
+    y: rawY / scale
+  };
+}
+
+function hitTestOrbit(x, y) {
+  if (!orbitState) return null;
+  const iconRadius = 9;
+  for (const slider of orbitState.sliders) {
+    const p = orbitState.positions[slider.path];
+    if (!p) continue;
+    const d = Math.hypot(p.x - x, p.y - y);
+    if (d <= iconRadius + 4) {
+      return { mode: 'slider', path: slider.path };
+    }
+  }
+  const centerDistance = Math.hypot(orbitState.center.x - x, orbitState.center.y - y);
+  if (centerDistance <= orbitState.innerRadius + 6) {
+    return { mode: 'center' };
+  }
+  return null;
+}
+
+function applyOrbitValueForPath(path) {
+  if (!orbitState) return;
+  const slider = orbitState.sliders.find((s) => s.path === path);
+  const p = orbitState.positions[path];
+  if (!slider || !p) return;
+  const value = sliderValueFromPosition(slider, p.x, p.y);
+  setParamValue(path, value, {
+    skipSnapshot: true,
+    skipEmit: true,
+    skipOrbitSync: true
+  });
+  sendRunParamsSnapshot();
+  if (emitRunStateFn) emitRunStateFn();
+}
+
+function applyOrbitValuesForAll() {
+  if (!orbitState) return;
+  for (const slider of orbitState.sliders) {
+    const p = orbitState.positions[slider.path];
+    if (!p) continue;
+    const value = sliderValueFromPosition(slider, p.x, p.y);
+    setParamValue(slider.path, value, {
+      skipSnapshot: true,
+      skipEmit: true,
+      skipOrbitSync: true
+    });
+  }
+  sendRunParamsSnapshot();
+  if (emitRunStateFn) emitRunStateFn();
+}
+
+function sliderValueFromPosition(slider, x, y) {
+  if (!orbitState) return slider.min;
+  const d = Math.hypot(x - orbitState.center.x, y - orbitState.center.y);
+  const u = normalizedFromDistance(d);
+  let value = slider.min + u * (slider.max - slider.min);
+  if (slider.step > 0) {
+    const steps = Math.round((value - slider.min) / slider.step);
+    value = slider.min + steps * slider.step;
+  }
+  return clamp(value, slider.min, slider.max);
+}
+
+function normalizedFromDistance(distance) {
+  if (!orbitState) return 0;
+  if (distance <= orbitState.innerRadius) return 1;
+  if (distance >= orbitState.outerRadius) return 0;
+  return (orbitState.outerRadius - distance) / (orbitState.outerRadius - orbitState.innerRadius);
+}
+
+function distanceFromNormalized(u) {
+  if (!orbitState) return 0;
+  const clamped = clamp(u, 0, 1);
+  return orbitState.outerRadius - clamped * (orbitState.outerRadius - orbitState.innerRadius);
+}
+
+function syncOrbitFromParams() {
+  if (!orbitState) return;
+  if (orbitPointer) {
+    // During any local drag, icon positions are user-authoritative.
+    // This prevents unrelated icon motion while dragging one slider or the center.
+    return;
+  }
+  const sliders = orbitState.sliders;
+  const count = Math.max(1, sliders.length);
+  sliders.forEach((slider, index) => {
+    const raw = paramValues[slider.path];
+    const current = Number.isFinite(raw) ? raw : slider.min;
+    const u = clamp((current - slider.min) / (slider.max - slider.min), 0, 1);
+    const distance = distanceFromNormalized(u);
+    const p = orbitState.positions[slider.path] || { x: orbitState.center.x, y: orbitState.center.y };
+    let dx = p.x - orbitState.center.x;
+    let dy = p.y - orbitState.center.y;
+    const mag = Math.hypot(dx, dy);
+    if (mag < 1e-6) {
+      const angle = (index / count) * Math.PI * 2 - Math.PI / 2;
+      dx = Math.cos(angle);
+      dy = Math.sin(angle);
+    } else {
+      dx /= mag;
+      dy /= mag;
+    }
+    orbitState.positions[slider.path] = {
+      x: clamp(orbitState.center.x + dx * distance, 0, orbitState.width),
+      y: clamp(orbitState.center.y + dy * distance, 0, orbitState.height)
+    };
+  });
+  scheduleOrbitDraw();
+}
+
+function drawOrbitNow() {
+  if (!orbitState || !orbitCtx || !orbitCanvas) return;
+  const ctx = orbitCtx;
+  const width = orbitState.width;
+  const height = orbitState.height;
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, width, height);
+
+  // Outer circle = min zone frontier.
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(orbitState.center.x, orbitState.center.y, orbitState.outerRadius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Inner disk = max zone.
+  ctx.fillStyle = 'rgba(250,250,250,0.15)';
+  ctx.beginPath();
+  ctx.arc(orbitState.center.x, orbitState.center.y, orbitState.innerRadius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(250,250,250,0.35)';
+  ctx.stroke();
+
+  ctx.font = '11px system-ui, sans-serif';
+  for (const slider of orbitState.sliders) {
+    const p = orbitState.positions[slider.path];
+    if (!p) continue;
+    ctx.fillStyle = slider.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    const label = shortOrbitLabel(slider.label);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText(label, p.x + 10, p.y - 10);
+  }
+}
+
+function shortOrbitLabel(label) {
+  if (!label) return '';
+  const max = 16;
+  return label.length > max ? `${label.slice(0, max - 1)}…` : label;
+}
+
+function scheduleOrbitDraw() {
+  orbitNeedsDraw = true;
+  if (orbitRafId) return;
+  orbitRafId = requestAnimationFrame(() => {
+    orbitRafId = null;
+    if (!orbitNeedsDraw) return;
+    orbitNeedsDraw = false;
+    drawOrbitNow();
+  });
+}
+
+function constrainOrbitPositions() {
+  if (!orbitState) return;
+  for (const slider of orbitState.sliders) {
+    const p = orbitState.positions[slider.path];
+    if (!p) continue;
+    p.x = clamp(p.x, 0, orbitState.width);
+    p.y = clamp(p.y, 0, orbitState.height);
+  }
+}
+
+function buildRunOrbitSnapshot(includeNonce = true) {
+  if (!orbitState) return null;
+  const positions = {};
+  for (const slider of orbitState.sliders) {
+    const p = orbitState.positions[slider.path];
+    if (!p) continue;
+    positions[slider.path] = { x: Math.round(p.x), y: Math.round(p.y) };
+  }
+  const snapshot = {
+    center: { x: Math.round(orbitState.center.x), y: Math.round(orbitState.center.y) },
+    innerRadius: Math.round(orbitState.innerRadius),
+    outerRadius: Math.round(orbitState.outerRadius),
+    positions
+  };
+  if (includeNonce) {
+    snapshot.nonce = Date.now();
+  }
+  return snapshot;
+}
+
+function sendRunOrbitSnapshot(force = false) {
+  const now = Date.now();
+  if (!force && now - lastRunOrbitSentAt < 120) return;
+  lastRunOrbitSentAt = now;
+  const snapshot = buildRunOrbitSnapshot(true);
+  if (!snapshot) return;
+  lastAppliedRemoteOrbitNonce = snapshot.nonce;
+  fetch('/api/state', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ runOrbitUi: snapshot })
+  }).catch(() => {});
+}
+
+function applyRemoteOrbitUi(remoteOrbit) {
+  if (!orbitState || !remoteOrbit || typeof remoteOrbit !== 'object') return;
+  if (remoteOrbit.center) {
+    orbitState.center.x = clamp(Number(remoteOrbit.center.x) || orbitState.center.x, 0, orbitState.width);
+    orbitState.center.y = clamp(Number(remoteOrbit.center.y) || orbitState.center.y, 0, orbitState.height);
+  }
+  if (Number.isFinite(remoteOrbit.innerRadius)) {
+    orbitState.innerRadius = Math.max(8, Number(remoteOrbit.innerRadius));
+  }
+  if (Number.isFinite(remoteOrbit.outerRadius)) {
+    orbitState.outerRadius = Math.max(14, Number(remoteOrbit.outerRadius));
+  }
+  ensureOrbitRadii();
+  const positions = remoteOrbit.positions && typeof remoteOrbit.positions === 'object' ? remoteOrbit.positions : {};
+  for (const slider of orbitState.sliders) {
+    const p = positions[slider.path];
+    if (!p) continue;
+    orbitState.positions[slider.path] = {
+      x: clamp(Number(p.x) || orbitState.positions[slider.path]?.x || 0, 0, orbitState.width),
+      y: clamp(Number(p.y) || orbitState.positions[slider.path]?.y || 0, 0, orbitState.height)
+    };
+  }
+  constrainOrbitPositions();
+  scheduleOrbitDraw();
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function collectButtonPaths(ui) {
@@ -840,11 +1377,12 @@ function uninstallUiReleaseGuard() {
 }
 
 function applyUiZoom() {
-  if (!controlsContent || !uiZoomWrap || !uiZoomStage || !currentUiRoot) return;
+  const zoomHost = controlsClassicPane || controlsContent;
+  if (!zoomHost || !uiZoomWrap || !uiZoomStage || !currentUiRoot) return;
   const naturalWidth = Math.max(currentUiRoot.scrollWidth, currentUiRoot.offsetWidth, 1);
   const naturalHeight = Math.max(currentUiRoot.scrollHeight, currentUiRoot.offsetHeight, 1);
-  const availableWidth = Math.max(controlsContent.clientWidth - 20, 1);
-  const availableHeight = Math.max(controlsContent.clientHeight - 20, 1);
+  const availableWidth = Math.max(zoomHost.clientWidth - 20, 1);
+  const availableHeight = Math.max(zoomHost.clientHeight - 20, 1);
   const fitScale = Math.min(1, availableWidth / naturalWidth, availableHeight / naturalHeight);
   const manualScale =
     uiZoom === 'auto'
@@ -858,9 +1396,10 @@ function applyUiZoom() {
 
 function setupUiZoomObserver() {
   teardownUiZoomObserver();
-  if (!controlsContent || !currentUiRoot) return;
+  const zoomHost = controlsClassicPane || controlsContent;
+  if (!zoomHost || !currentUiRoot) return;
   uiResizeObserver = new ResizeObserver(() => applyUiZoom());
-  uiResizeObserver.observe(controlsContent);
+  uiResizeObserver.observe(zoomHost);
   uiResizeObserver.observe(currentUiRoot);
 }
 
@@ -994,8 +1533,12 @@ function findMidiTargets(ui) {
   };
 }
 
-function setParamValue(path, value) {
+function setParamValue(path, value, options = {}) {
   if (!path) return;
+  const skipSnapshot = options && options.skipSnapshot === true;
+  const skipEmit = options && options.skipEmit === true;
+  const skipOrbitSync = options && options.skipOrbitSync === true;
+  if (paramValues[path] === value) return;
   try {
     if (dspNode) {
       dspNode.setParamValue(path, value);
@@ -1004,8 +1547,13 @@ function setParamValue(path, value) {
     if (faustUIInstance) {
       faustUIInstance.paramChangeByDSP(path, value);
     }
-    sendRunParamsSnapshot();
-    if (emitRunStateFn) emitRunStateFn();
+    if (!skipSnapshot) {
+      sendRunParamsSnapshot();
+    }
+    if (!skipOrbitSync) {
+      syncOrbitFromParams();
+    }
+    if (!skipEmit && emitRunStateFn) emitRunStateFn();
   } catch {
     // ignore
   }
@@ -1035,6 +1583,7 @@ function applyRemoteRunParams(remoteParams) {
     }
   }
   if (changed) {
+    syncOrbitFromParams();
     if (emitRunStateFn) emitRunStateFn();
     sendRunParamsSnapshot();
   }
@@ -1106,6 +1655,7 @@ function applyParamValues() {
       // ignore
     }
   }
+  syncOrbitFromParams();
 }
 
 function normalizeRestoredParamValue(path, value) {
@@ -1159,6 +1709,7 @@ function attachOutputParamHandler() {
     if (faustUIInstance) {
       faustUIInstance.paramChangeByDSP(path, value);
     }
+    syncOrbitFromParams();
     sendRunParamsSnapshot();
     if (emitRunStateFn) emitRunStateFn();
   });
@@ -1186,6 +1737,7 @@ function startParamPolling() {
         // ignore
       }
     }
+    syncOrbitFromParams();
     if (emitRunStateFn) emitRunStateFn();
   }, 150);
 }
@@ -1208,9 +1760,18 @@ function prepareControlsContainer(container) {
   bg.className = 'run-controls-bg';
   const content = document.createElement('div');
   content.className = 'run-controls-content';
+  const split = document.createElement('div');
+  split.className = 'run-controls-split';
+  const classicPane = document.createElement('div');
+  classicPane.className = 'run-controls-pane run-controls-pane-classic';
+  const orbitPane = document.createElement('div');
+  orbitPane.className = 'run-controls-pane run-controls-pane-orbit';
+  split.appendChild(classicPane);
+  split.appendChild(orbitPane);
+  content.appendChild(split);
   container.appendChild(bg);
   container.appendChild(content);
-  return { bg, content };
+  return { bg, content, split, classicPane, orbitPane };
 }
 
 function ensureFaustUiCss() {
@@ -1504,15 +2065,20 @@ function sleep(ms) {
 
 function applyRunState(runState, controls) {
   if (!runState) return;
+  if (runState.orbitUi && typeof runState.orbitUi === 'object') {
+    pendingOrbitUi = runState.orbitUi;
+  }
+  if (runState.uiZoom) {
+    uiZoom = String(runState.uiZoom);
+  }
+  if (runState.orbitZoom) {
+    orbitZoom = String(runState.orbitZoom);
+  }
   if (typeof runState.midiSource === 'string') {
     midiSource = runState.midiSource;
     if (controls.midiInputSelect) {
       controls.midiInputSelect.value = midiSource;
     }
-  }
-  if (runState.uiZoom && controls.zoomSelect) {
-    uiZoom = String(runState.uiZoom);
-    controls.zoomSelect.value = uiZoom;
   }
   const scope = runState.scope || {};
   if (typeof runState.polyVoices === 'number' && controls.modeSelect) {
@@ -1570,14 +2136,33 @@ export function dispose() {
   stopParamPolling();
   outputParamHandlerAttached = false;
   uiZoom = 'auto';
+  orbitZoom = '100';
   uiZoomWrap = null;
   uiZoomStage = null;
   teardownUiZoomObserver();
+  teardownOrbitCanvasResize();
+  if (orbitRafId) {
+    cancelAnimationFrame(orbitRafId);
+    orbitRafId = null;
+  }
+  orbitCanvas = null;
+  orbitBody = null;
+  orbitCtx = null;
+  orbitState = null;
+  orbitPointer = null;
+  orbitNeedsDraw = false;
+  orbitBaseWidth = 0;
+  orbitBaseHeight = 0;
+  controlsSplit = null;
+  controlsClassicPane = null;
+  controlsOrbitPane = null;
   if (remoteSyncTimer) {
     clearInterval(remoteSyncTimer);
     remoteSyncTimer = null;
   }
   lastAppliedTriggerNonce = 0;
+  lastAppliedRemoteOrbitNonce = 0;
+  pendingOrbitUi = null;
   lastSpectrumSummary = null;
 }
 

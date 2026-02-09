@@ -206,7 +206,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   /**
    * POST /state
    * Met à jour l'état courant (session + vue)
-   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runParams?: any, runTransport?: any, runTrigger?: any, runPolyphony?: number, runMidi?: any, spectrum?: any, spectrumSummary?: any }
+   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runParams?: any, runTransport?: any, runTrigger?: any, runPolyphony?: number, runMidi?: any, runOrbitUi?: any, spectrum?: any, spectrumSummary?: any }
    */
   router.post('/state', (req: Request, res: Response) => {
     const {
@@ -219,6 +219,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       runTrigger,
       runPolyphony,
       runMidi,
+      runOrbitUi,
       spectrum,
       spectrumSummary
     } =
@@ -235,6 +236,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       runTrigger?: AppState['runTrigger'];
       runPolyphony?: number;
       runMidi?: AppState['runMidi'];
+      runOrbitUi?: AppState['runOrbitUi'];
       spectrum?: AppState['spectrum'];
       spectrumSummary?: AppState['spectrumSummary'];
     } = {};
@@ -277,6 +279,9 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
     if (runMidi !== undefined) {
       partial.runMidi = runMidi as AppState['runMidi'];
+    }
+    if (runOrbitUi !== undefined) {
+      partial.runOrbitUi = runOrbitUi as AppState['runOrbitUi'];
     }
     if (spectrum !== undefined) {
       partial.spectrum = spectrum as AppState['spectrum'];

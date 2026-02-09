@@ -18,7 +18,9 @@ const state = {
     scope: null,
     polyVoices: 0,
     midiSource: 'virtual',
-    uiZoom: 'auto'
+    uiZoom: 'auto',
+    orbitZoom: '100',
+    orbitUi: null
   },
   viewScroll: {
     dsp: { line: 1 },
@@ -136,7 +138,9 @@ async function renderCurrentView() {
             polyVoices: state.runGlobal.polyVoices,
             midiSource: state.runGlobal.midiSource,
             uiZoom: state.runGlobal.uiZoom,
-            params: state.runStateBySha[state.currentSha]?.params
+            orbitZoom: state.runGlobal.orbitZoom,
+            params: state.runStateBySha[state.currentSha]?.params,
+            orbitUi: state.runStateBySha[state.currentSha]?.orbitUi || state.runGlobal.orbitUi
           }
         : undefined;
     const perSession =
@@ -172,6 +176,16 @@ async function renderCurrentView() {
         }
         if (snapshot.uiZoom) {
           state.runGlobal.uiZoom = String(snapshot.uiZoom);
+        }
+        if (snapshot.orbitZoom) {
+          state.runGlobal.orbitZoom = String(snapshot.orbitZoom);
+        }
+        if (snapshot.orbitUi && typeof snapshot.orbitUi === 'object') {
+          state.runGlobal.orbitUi = snapshot.orbitUi;
+          state.runStateBySha[state.currentSha] = {
+            ...(state.runStateBySha[state.currentSha] || {}),
+            orbitUi: snapshot.orbitUi
+          };
         }
         if (snapshot.params) {
           state.runStateBySha[state.currentSha] = {

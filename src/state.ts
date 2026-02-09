@@ -77,6 +77,13 @@ export interface AppState {
     holdMs: number;
     nonce: number;
   };
+  runOrbitUi?: {
+    center: { x: number; y: number };
+    innerRadius: number;
+    outerRadius: number;
+    positions: Record<string, { x: number; y: number }>;
+    nonce: number;
+  };
   spectrum?: {
     capturedAt?: number;
     scale: 'log' | 'linear';
@@ -140,6 +147,7 @@ export class StateStore {
       runTrigger: state.runTrigger,
       runPolyphony: Number.isFinite(state.runPolyphony) ? Math.max(0, Math.round(state.runPolyphony || 0)) : 0,
       runMidi: state.runMidi,
+      runOrbitUi: state.runOrbitUi,
       spectrum: state.spectrum,
       spectrumSummary: state.spectrumSummary,
       updatedAt: Date.now()
