@@ -46,6 +46,7 @@ let lastRunParamsSentAt = 0;
 let lastAppliedTransportNonce = 0;
 let lastAppliedTriggerNonce = 0;
 let lastAppliedMidiNonce = 0;
+let isSwitchingPolyphony = false;
 let runViewEnteredAt = 0;
 let lastAppliedRemoteRunParamsUpdatedAt = 0;
 
@@ -186,6 +187,13 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     midiInputSelect,
     zoomSelect
   });
+  // Keep control labels aligned with effective internal scope state.
+  scopeView.value = scopeState.view;
+  scopeScale.value = scopeState.spectrumScale;
+  scopeMode.value = scopeState.mode;
+  scopeSlope.value = scopeState.slope;
+  scopeThreshold.value = String(scopeState.threshold);
+  scopeHoldoff.value = String(scopeState.holdoffMs);
   paramValues = runState && runState.params ? { ...runState.params } : {};
   const emitRunState = () => {
     if (typeof onRunStateChange === 'function') {
@@ -268,21 +276,34 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   }
 
   async function applyPolyphonyChange(nextVoices) {
+    if (isSwitchingPolyphony) return;
     const allowed = new Set([0, 1, 2, 4, 8, 16, 32, 64]);
     const normalized = Math.max(0, Math.round(Number(nextVoices) || 0));
     const safeVoices = allowed.has(normalized) ? normalized : 0;
     if (safeVoices === polyVoices) return;
+    isSwitchingPolyphony = true;
     polyVoices = safeVoices;
     modeSelect.value = polyVoices > 0 ? String(polyVoices) : 'mono';
+    statusEl.textContent = 'Switching mode...';
+    toggleBtn.disabled = true;
     emitRunState();
     const wasRunning = audioRunning;
-    cleanupAudio();
-    compiledGenerator = null;
-    compiledGeneratorMode = 'mono';
-    await updateMidi();
-    await publishPolyphonyState();
-    if (wasRunning) {
-      await startAudio();
+    try {
+      cleanupAudio();
+      compiledGenerator = null;
+      compiledGeneratorMode = 'mono';
+      await compileAndRenderUI(controlsEl, sha, polyVoices);
+      await updateMidi();
+      await publishPolyphonyState();
+      if (wasRunning) {
+        await startAudio();
+      } else {
+        statusEl.textContent = 'Ready';
+        toggleBtn.textContent = 'Start Audio';
+      }
+    } finally {
+      toggleBtn.disabled = false;
+      isSwitchingPolyphony = false;
     }
   }
 
@@ -475,16 +496,21 @@ export async function render(container, { sha, runState, onRunStateChange }) {
         const cmd = remote.runTransport;
         if (cmd.nonce !== lastAppliedTransportNonce) {
           lastAppliedTransportNonce = cmd.nonce;
-          if (cmd.action === 'start') {
-            if (!audioRunning) await startAudio();
-          } else if (cmd.action === 'stop') {
-            if (audioRunning) stopAudio();
-          } else if (cmd.action === 'toggle') {
-            if (audioRunning) {
-              stopAudio();
-            } else {
-              await startAudio();
+          if (!isSwitchingPolyphony) {
+            if (cmd.action === 'start') {
+              if (!audioRunning) await startAudio();
+            } else if (cmd.action === 'stop') {
+              if (audioRunning) stopAudio();
+            } else if (cmd.action === 'toggle') {
+              if (audioRunning) {
+                stopAudio();
+              } else {
+                await startAudio();
+              }
             }
+          } else {
+            // Re-apply later once polyphony switch is complete.
+            lastAppliedTransportNonce = cmd.nonce - 1;
           }
         }
       }
