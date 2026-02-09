@@ -87,6 +87,7 @@ function generateViewSelect() {
  * Change la vue active
  */
 async function switchView(viewId) {
+  hideError();
   if (viewId !== state.currentView) {
     captureScrollLine();
     const currentView = state.views.find(v => v.id === state.currentView);
@@ -143,6 +144,14 @@ async function renderCurrentView() {
       sha: state.currentSha,
       runState,
       scrollState,
+      onError: (message) => {
+        if (typeof message === 'string' && message.trim()) {
+          showError(message);
+        }
+      },
+      onClearError: () => {
+        hideError();
+      },
       onRunStateChange: (snapshot) => {
         if (!state.currentSha || !snapshot) return;
         if (snapshot.scope) {

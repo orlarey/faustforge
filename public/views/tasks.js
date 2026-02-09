@@ -10,6 +10,36 @@ export function getName() {
   return 'Tasks';
 }
 
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function generateLineNumbers(lineCount) {
+  const lines = [];
+  for (let i = 1; i <= lineCount; i++) {
+    lines.push(i);
+  }
+  return lines.join('\n');
+}
+
+function renderDotViewer(dotRoot, dot) {
+  const lineCount = dot.split('\n').length;
+  dotRoot.innerHTML = `
+    <div class="code-editor dot-editor">
+      <div class="line-numbers">${generateLineNumbers(lineCount)}</div>
+      <div class="code-content">${escapeHtml(dot)}</div>
+    </div>
+  `;
+  const lineNumbers = dotRoot.querySelector('.line-numbers');
+  const codeContent = dotRoot.querySelector('.code-content');
+  codeContent.addEventListener('scroll', () => {
+    lineNumbers.scrollTop = codeContent.scrollTop;
+  });
+}
+
 function getRenderFailureMessage(err) {
   const raw =
     err && typeof err === 'object' && 'message' in err ? String(err.message || '') : String(err || '');
@@ -82,7 +112,7 @@ async function ensureViz() {
   return vizScriptsPromise;
 }
 
-export async function render(container, { sha }) {
+export async function render(container, { sha, onError, onClearError }) {
   let dot = '';
   try {
     const response = await fetch(`/api/${sha}/tasks.dot`);
@@ -113,22 +143,62 @@ export async function render(container, { sha }) {
         <div class="signals-container">
           <div class="signals-content"><div class="info">Rendering graph...</div></div>
         </div>
-        <pre class="signals-dot hidden"></pre>
+        <div class="signals-splitter hidden" title="Resize graph / DOT"></div>
+        <div class="signals-dot hidden"></div>
       </div>
     </div>
   `;
 
-  const viewEl = container.querySelector('.signals-view');
   const content = container.querySelector('.signals-content');
   const dotPre = container.querySelector('.signals-dot');
+  const splitter = container.querySelector('.signals-splitter');
   const zoomLevel = container.querySelector('.signals-zoom-level');
   const toggleDotBtn = container.querySelector('.signals-toggle-dot');
   const containerEl = container.querySelector('.signals-container');
+  const mainEl = container.querySelector('.signals-main');
   let zoom = 100;
+  let splitPercent = 65;
 
-  dotPre.textContent = dot;
+  renderDotViewer(dotPre, dot);
+  function applySplit() {
+    const safe = Math.max(15, Math.min(85, splitPercent));
+    containerEl.style.flex = `0 0 ${safe}%`;
+    dotPre.style.flex = '1 1 auto';
+  }
+
+  function setDotVisible(visible) {
+    if (visible) {
+      dotPre.classList.remove('hidden');
+      splitter.classList.remove('hidden');
+      mainEl.classList.add('split-enabled');
+      applySplit();
+    } else {
+      dotPre.classList.add('hidden');
+      splitter.classList.add('hidden');
+      mainEl.classList.remove('split-enabled');
+      containerEl.style.flex = '1 1 auto';
+      dotPre.style.flex = '';
+    }
+  }
+
   toggleDotBtn.addEventListener('click', () => {
-    dotPre.classList.toggle('hidden');
+    setDotVisible(dotPre.classList.contains('hidden'));
+  });
+
+  splitter.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+    const onMove = (moveEvent) => {
+      const rect = mainEl.getBoundingClientRect();
+      if (!rect.height) return;
+      splitPercent = ((moveEvent.clientY - rect.top) / rect.height) * 100;
+      applySplit();
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   });
 
   function applyZoom() {
@@ -175,14 +245,21 @@ export async function render(container, { sha }) {
     content.innerHTML = '';
     content.appendChild(svg);
     fitToContainer();
+    if (typeof onClearError === 'function') {
+      onClearError();
+    }
   } catch (err) {
     const msg = getRenderFailureMessage(err);
-    content.innerHTML = `
-      <div class="error">${msg.title}</div>
-      <div class="info">${msg.detail}</div>
-    `;
-    viewEl.classList.add('signals-degraded');
-    dotPre.classList.remove('hidden');
+    if (typeof onError === 'function') {
+      onError(`${msg.title} ${msg.detail}`.trim());
+    }
+    content.innerHTML = '';
+    const main = container.querySelector('.signals-main');
+    if (main) {
+      main.classList.add('signals-dot-only');
+    }
+    setDotVisible(true);
+    splitter.classList.add('hidden');
   }
 }
 
