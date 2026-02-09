@@ -17,18 +17,25 @@ const ONBOARDING_GUIDE = {
   goals: [
     'Design and iterate Faust DSP',
     'Control run parameters safely',
-    'Measure spectral impact and audio quality'
+    'Measure spectral impact and audio quality',
+    'Control polyphony and MIDI notes when relevant'
   ],
   prerequisites: [
     'If audio tools fail with "Audio is locked", ask the user to click "Enable Audio" once in Faustforge UI.'
   ],
   workflow: [
     '1) set_view("run")',
-    '2) get_run_ui() and get_run_params()',
-    '3) For continuous params: set_run_param_and_get_spectrum(...)',
-    '4) For transient buttons: trigger_button_and_get_spectrum(...)',
-    '5) Compare aggregate.summary and iterate one parameter at a time'
+    '2) get_polyphony() then set_polyphony(...) if needed (0=mono)',
+    '3) get_run_ui() and get_run_params()',
+    '4) For continuous params: set_run_param_and_get_spectrum(...)',
+    '5) For transient buttons: trigger_button_and_get_spectrum(...)',
+    '6) For note events: midi_note_on/off/pulse(...)',
+    '7) Compare aggregate.summary and iterate one parameter at a time'
   ],
+  toolHints: {
+    polyphony: 'Use set_polyphony(0) for mono, else 1/2/4/8/16/32/64.',
+    midi: 'Prefer midi_note_pulse(note, velocity, holdMs) for deterministic one-shot tests.'
+  },
   qualityThresholds: {
     clipRatioQ_warn: 1,
     clipRatioQ_severe: 5,
@@ -58,6 +65,26 @@ async function runTransport(action) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action })
+  });
+}
+
+async function getPolyphony() {
+  return requestJson('/api/run/polyphony');
+}
+
+async function setPolyphony(voices) {
+  return requestJson('/api/run/polyphony', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ voices })
+  });
+}
+
+async function sendMidi(action, note, velocity, holdMs) {
+  return requestJson('/api/run/midi', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, note, velocity, holdMs })
   });
 }
 
@@ -480,6 +507,33 @@ server.registerTool(
 );
 
 server.registerTool(
+  'get_polyphony',
+  {
+    description: 'Get current polyphony voices for Run mode (0 = mono).',
+    inputSchema: {}
+  },
+  async () => {
+    const result = await getPolyphony();
+    return toResult({ sha1: result.sha1, voices: result.voices || 0 });
+  }
+);
+
+server.registerTool(
+  'set_polyphony',
+  {
+    description: 'Set Run polyphony voices. Convention: 0 = mono. Allowed: 0,1,2,4,8,16,32,64.',
+    inputSchema: {
+      voices: z.number().int().min(0).max(64)
+    }
+  },
+  async ({ voices }) => {
+    await ensureRunView().catch(() => {});
+    const result = await setPolyphony(voices);
+    return toResult({ sha1: result.sha1, voices: result.voices || 0 });
+  }
+);
+
+server.registerTool(
   'set_run_param',
   {
     description: [
@@ -505,6 +559,74 @@ server.registerTool(
       body: JSON.stringify({ path, value })
     });
     return toResult({ sha1: result.sha1, path: result.path, value: result.value });
+  }
+);
+
+server.registerTool(
+  'midi_note_on',
+  {
+    description: 'Send MIDI note-on to Run engine. Requires polyphonic DSP in most cases.',
+    inputSchema: {
+      note: z.number().int().min(0).max(127),
+      velocity: z.number().min(0).max(1).optional()
+    }
+  },
+  async ({ note, velocity }) => {
+    await ensureRunView().catch(() => {});
+    await ensureAudioUnlocked();
+    await runTransport('start').catch(() => {});
+    const safeVelocity = typeof velocity === 'number' ? velocity : 0.8;
+    const result = await sendMidi('on', note, safeVelocity);
+    return toResult({
+      sha1: result.sha1,
+      midi: result.runMidi,
+      sent: { action: 'on', note, velocity: safeVelocity }
+    });
+  }
+);
+
+server.registerTool(
+  'midi_note_off',
+  {
+    description: 'Send MIDI note-off to Run engine.',
+    inputSchema: {
+      note: z.number().int().min(0).max(127)
+    }
+  },
+  async ({ note }) => {
+    await ensureRunView().catch(() => {});
+    await ensureAudioUnlocked();
+    const result = await sendMidi('off', note);
+    return toResult({
+      sha1: result.sha1,
+      midi: result.runMidi,
+      sent: { action: 'off', note }
+    });
+  }
+);
+
+server.registerTool(
+  'midi_note_pulse',
+  {
+    description: 'Send MIDI note-on then note-off automatically after holdMs.',
+    inputSchema: {
+      note: z.number().int().min(0).max(127),
+      velocity: z.number().min(0).max(1).optional(),
+      holdMs: z.number().int().min(1).max(5000).optional()
+    }
+  },
+  async ({ note, velocity, holdMs }) => {
+    await ensureRunView().catch(() => {});
+    await ensureAudioUnlocked();
+    await runTransport('start').catch(() => {});
+    const safeVelocity = typeof velocity === 'number' ? velocity : 0.8;
+    const safeHoldMs = typeof holdMs === 'number' ? holdMs : 120;
+    const result = await sendMidi('pulse', note, safeVelocity, safeHoldMs);
+    return toResult({
+      sha1: result.sha1,
+      midi: result.runMidi,
+      sent: { action: 'pulse', note, velocity: safeVelocity, holdMs: safeHoldMs }
+    });
   }
 );
 

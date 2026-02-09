@@ -69,6 +69,14 @@ export interface AppState {
     holdMs: number;
     nonce: number;
   };
+  runPolyphony?: number;
+  runMidi?: {
+    action: 'on' | 'off' | 'pulse';
+    note: number;
+    velocity: number;
+    holdMs: number;
+    nonce: number;
+  };
   spectrum?: {
     capturedAt?: number;
     scale: 'log' | 'linear';
@@ -103,6 +111,9 @@ export class StateStore {
       if (parsed.audioUnlocked !== true) {
         parsed.audioUnlocked = false;
       }
+      if (!Number.isFinite(parsed.runPolyphony)) {
+        parsed.runPolyphony = 0;
+      }
       return parsed;
     } catch {
       return {
@@ -110,6 +121,7 @@ export class StateStore {
         filename: null,
         view: 'dsp',
         audioUnlocked: false,
+        runPolyphony: 0,
         updatedAt: Date.now()
       };
     }
@@ -126,6 +138,8 @@ export class StateStore {
       runParamsUpdatedAt: state.runParamsUpdatedAt,
       runTransport: state.runTransport,
       runTrigger: state.runTrigger,
+      runPolyphony: Number.isFinite(state.runPolyphony) ? Math.max(0, Math.round(state.runPolyphony || 0)) : 0,
+      runMidi: state.runMidi,
       spectrum: state.spectrum,
       spectrumSummary: state.spectrumSummary,
       updatedAt: Date.now()

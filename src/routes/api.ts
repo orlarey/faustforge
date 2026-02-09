@@ -206,7 +206,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   /**
    * POST /state
    * Met à jour l'état courant (session + vue)
-   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runParams?: any, runTransport?: any, runTrigger?: any, spectrum?: any, spectrumSummary?: any }
+   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runParams?: any, runTransport?: any, runTrigger?: any, runPolyphony?: number, runMidi?: any, spectrum?: any, spectrumSummary?: any }
    */
   router.post('/state', (req: Request, res: Response) => {
     const {
@@ -217,6 +217,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       runParams,
       runTransport,
       runTrigger,
+      runPolyphony,
+      runMidi,
       spectrum,
       spectrumSummary
     } =
@@ -231,6 +233,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       runParamsUpdatedAt?: number;
       runTransport?: AppState['runTransport'];
       runTrigger?: AppState['runTrigger'];
+      runPolyphony?: number;
+      runMidi?: AppState['runMidi'];
       spectrum?: AppState['spectrum'];
       spectrumSummary?: AppState['spectrumSummary'];
     } = {};
@@ -267,6 +271,12 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
     if (runTrigger !== undefined) {
       partial.runTrigger = runTrigger as AppState['runTrigger'];
+    }
+    if (typeof runPolyphony === 'number' && Number.isFinite(runPolyphony)) {
+      partial.runPolyphony = Math.max(0, Math.round(runPolyphony));
+    }
+    if (runMidi !== undefined) {
+      partial.runMidi = runMidi as AppState['runMidi'];
     }
     if (spectrum !== undefined) {
       partial.spectrum = spectrum as AppState['spectrum'];
@@ -412,6 +422,88 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       }
     });
     res.json({ sha1: next.sha1, runTrigger: next.runTrigger });
+  });
+
+  /**
+   * GET /run/polyphony
+   * Récupère le mode polyphonique courant (0 = mono)
+   */
+  router.get('/run/polyphony', (_req: Request, res: Response) => {
+    const state = stateStore.read();
+    if (!state.sha1) {
+      res.status(400).json({ error: 'No active session' });
+      return;
+    }
+    const voices = Number.isFinite(state.runPolyphony) ? Math.max(0, Math.round(state.runPolyphony || 0)) : 0;
+    res.json({ sha1: state.sha1, voices });
+  });
+
+  /**
+   * POST /run/polyphony
+   * Met à jour le mode polyphonique (0 = mono)
+   * Body: { voices: number }
+   */
+  router.post('/run/polyphony', (req: Request, res: Response) => {
+    const state = stateStore.read();
+    if (!state.sha1) {
+      res.status(400).json({ error: 'No active session' });
+      return;
+    }
+    const { voices } = req.body || {};
+    if (typeof voices !== 'number' || !Number.isFinite(voices)) {
+      res.status(400).json({ error: 'Missing or invalid voices' });
+      return;
+    }
+    const safeVoices = Math.max(0, Math.round(voices));
+    const allowed = new Set([0, 1, 2, 4, 8, 16, 32, 64]);
+    if (!allowed.has(safeVoices)) {
+      res.status(400).json({ error: 'Invalid voices (allowed: 0,1,2,4,8,16,32,64)' });
+      return;
+    }
+    const next = stateStore.update({ runPolyphony: safeVoices });
+    res.json({ sha1: next.sha1, voices: next.runPolyphony || 0 });
+  });
+
+  /**
+   * POST /run/midi
+   * Publie une commande MIDI run atomique
+   * Body: { action: "on" | "off" | "pulse", note: number, velocity?: number, holdMs?: number }
+   */
+  router.post('/run/midi', (req: Request, res: Response) => {
+    const state = stateStore.read();
+    if (!state.sha1) {
+      res.status(400).json({ error: 'No active session' });
+      return;
+    }
+    const { action, note, velocity, holdMs } = req.body || {};
+    if (action !== 'on' && action !== 'off' && action !== 'pulse') {
+      res.status(400).json({ error: 'Invalid action' });
+      return;
+    }
+    if (typeof note !== 'number' || !Number.isFinite(note)) {
+      res.status(400).json({ error: 'Missing or invalid note' });
+      return;
+    }
+    const safeNote = Math.max(0, Math.min(127, Math.round(note)));
+    const safeVelocity =
+      typeof velocity === 'number' && Number.isFinite(velocity)
+        ? Math.max(0, Math.min(1, velocity))
+        : 0.8;
+    const safeHoldMs =
+      typeof holdMs === 'number' && Number.isFinite(holdMs)
+        ? Math.max(1, Math.min(5000, Math.round(holdMs)))
+        : 120;
+
+    const next = stateStore.update({
+      runMidi: {
+        action,
+        note: safeNote,
+        velocity: safeVelocity,
+        holdMs: safeHoldMs,
+        nonce: Date.now()
+      }
+    });
+    res.json({ sha1: next.sha1, runMidi: next.runMidi });
   });
 
   /**

@@ -45,6 +45,7 @@ let remoteSyncTimer = null;
 let lastRunParamsSentAt = 0;
 let lastAppliedTransportNonce = 0;
 let lastAppliedTriggerNonce = 0;
+let lastAppliedMidiNonce = 0;
 let runViewEnteredAt = 0;
 let lastAppliedRemoteRunParamsUpdatedAt = 0;
 
@@ -254,6 +255,37 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     midiOnly = true;
   };
 
+  async function publishPolyphonyState() {
+    try {
+      await fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runPolyphony: polyVoices })
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  async function applyPolyphonyChange(nextVoices) {
+    const allowed = new Set([0, 1, 2, 4, 8, 16, 32, 64]);
+    const normalized = Math.max(0, Math.round(Number(nextVoices) || 0));
+    const safeVoices = allowed.has(normalized) ? normalized : 0;
+    if (safeVoices === polyVoices) return;
+    polyVoices = safeVoices;
+    modeSelect.value = polyVoices > 0 ? String(polyVoices) : 'mono';
+    emitRunState();
+    const wasRunning = audioRunning;
+    cleanupAudio();
+    compiledGenerator = null;
+    compiledGeneratorMode = 'mono';
+    await updateMidi();
+    await publishPolyphonyState();
+    if (wasRunning) {
+      await startAudio();
+    }
+  }
+
   midiInputSelect.addEventListener('change', async () => {
     await updateMidiSourceUi(midiInputSelect.value);
     emitRunState();
@@ -267,16 +299,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
 
   modeSelect.addEventListener('change', async () => {
     const value = modeSelect.value;
-    polyVoices = value === 'mono' ? 0 : Math.max(1, parseInt(value, 10));
-    emitRunState();
-    const wasRunning = audioRunning;
-    cleanupAudio();
-    compiledGenerator = null;
-    compiledGeneratorMode = 'mono';
-    await updateMidi();
-    if (wasRunning) {
-      await startAudio();
-    }
+    const voices = value === 'mono' ? 0 : Math.max(1, parseInt(value, 10));
+    await applyPolyphonyChange(voices);
   });
 
   const prepared = prepareControlsContainer(controlsEl);
@@ -393,7 +417,40 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   if (runState && runState.audioRunning) {
     await startAudio();
   }
+  await publishPolyphonyState();
   emitRunState();
+
+  async function executeRemoteMidi(runMidi) {
+    if (!runMidi || typeof runMidi !== 'object') return;
+    const action = runMidi.action;
+    const note =
+      typeof runMidi.note === 'number' && Number.isFinite(runMidi.note)
+        ? Math.max(0, Math.min(127, Math.round(runMidi.note)))
+        : 60;
+    const velocity =
+      typeof runMidi.velocity === 'number' && Number.isFinite(runMidi.velocity)
+        ? Math.max(0, Math.min(1, runMidi.velocity))
+        : 0.8;
+    const holdMs =
+      typeof runMidi.holdMs === 'number' && Number.isFinite(runMidi.holdMs)
+        ? Math.max(1, Math.min(5000, Math.round(runMidi.holdMs)))
+        : 120;
+    if (action === 'on') {
+      if (!audioRunning) await startAudio();
+      noteOnMidi(note, velocity);
+      return;
+    }
+    if (action === 'off') {
+      noteOffMidi(note);
+      return;
+    }
+    if (action === 'pulse') {
+      if (!audioRunning) await startAudio();
+      noteOnMidi(note, velocity);
+      await sleep(holdMs);
+      noteOffMidi(note);
+    }
+  }
 
   async function syncRemoteRunState() {
     if (!currentSha) return;
@@ -432,11 +489,26 @@ export async function render(container, { sha, runState, onRunStateChange }) {
         }
       }
 
+      if (typeof remote.runPolyphony === 'number' && Number.isFinite(remote.runPolyphony)) {
+        const remoteVoices = Math.max(0, Math.round(remote.runPolyphony));
+        if (remoteVoices !== polyVoices) {
+          await applyPolyphonyChange(remoteVoices);
+        }
+      }
+
       if (remote.runTrigger && typeof remote.runTrigger.nonce === 'number') {
         const trigger = remote.runTrigger;
         if (trigger.nonce !== lastAppliedTriggerNonce && trigger.nonce >= runViewEnteredAt) {
           lastAppliedTriggerNonce = trigger.nonce;
           await executeLocalTrigger(trigger.path, trigger.holdMs);
+        }
+      }
+
+      if (remote.runMidi && typeof remote.runMidi.nonce === 'number') {
+        const cmd = remote.runMidi;
+        if (cmd.nonce !== lastAppliedMidiNonce && cmd.nonce >= runViewEnteredAt) {
+          lastAppliedMidiNonce = cmd.nonce;
+          await executeRemoteMidi(cmd);
         }
       }
     } catch {

@@ -525,6 +525,47 @@ Effets :
   - La fenêtre de capture commence après l’attente settleMs
 ```
 
+### MCP‑13ter : get_polyphony / set_polyphony
+
+```text
+mcp.get_polyphony : () → { sha1: SHA1, voices: Int }
+mcp.set_polyphony : (voices: Int) → { sha1: SHA1, voices: Int }
+
+Préconditions :
+  - Une session active en état partagé
+
+Règles :
+  - Convention : voices=0 => mode mono
+  - Valeurs autorisées : 0, 1, 2, 4, 8, 16, 32, 64
+
+Effets :
+  - set_polyphony force la vue partagée sur "run"
+  - La vue run recompile le DSP dans le mode demandé
+  - Le mode courant est reflété dans l’état partagé (runPolyphony)
+```
+
+### MCP‑13quater : midi_note_on / midi_note_off / midi_note_pulse
+
+```text
+mcp.midi_note_on : (note: Int[0..127], velocity?: Number[0..1]) → { sha1: SHA1, midi: Json, sent: Json }
+mcp.midi_note_off : (note: Int[0..127]) → { sha1: SHA1, midi: Json, sent: Json }
+mcp.midi_note_pulse : (note: Int[0..127], velocity?: Number[0..1], holdMs?: Int[1..5000]) → { sha1: SHA1, midi: Json, sent: Json }
+
+Préconditions :
+  - Une session active en état partagé
+  - Audio déverrouillé (Enable Audio validé dans l’UI)
+
+Effets :
+  - Force la vue partagée sur "run"
+  - Démarre l’audio si nécessaire (note_on / note_pulse)
+  - Publie une commande MIDI atomique dans l’état partagé (runMidi + nonce)
+  - La vue run exécute la commande exactement une fois par nonce
+
+Notes :
+  - Le mode polyphonique est généralement requis pour un comportement MIDI musical complet.
+  - En fallback, la vue run peut mapper MIDI sur des paramètres (gate/freq/key/gain) si disponibles.
+```
+
 ### MCP‑14 : run_transport (start/stop/toggle audio)
 
 ```text
@@ -605,12 +646,14 @@ Boucle recommandée pour interaction IA :
 
 1) set_view(\"run\")
 2) get_run_ui()              -- découverte des paths
-3) run_transport(\"start\")   -- audio ON
-4) set_run_param(...)        -- réglages continus
-5) set_run_param_and_get_spectrum(path, value, settleMs, captureMs)
-6) trigger_button_and_get_spectrum(path, holdMs, captureMs)
-7) analyser series + aggregate.summary
-8) itérer les paramètres puis recapturer
+3) get_polyphony() / set_polyphony(voices)
+4) run_transport(\"start\")   -- audio ON
+5) set_run_param(...)        -- réglages continus
+6) set_run_param_and_get_spectrum(path, value, settleMs, captureMs)
+7) trigger_button_and_get_spectrum(path, holdMs, captureMs)
+8) midi_note_on/off/pulse(...) selon le cas
+9) analyser series + aggregate.summary
+10) itérer les paramètres puis recapturer
 ```
 
 Contraintes temporelles :

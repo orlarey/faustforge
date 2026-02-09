@@ -200,11 +200,16 @@ Run control tools:
 - `get_onboarding_guide()` -> best-practice workflow + thresholds for autonomous AI behavior
 - `get_run_ui` -> return Faust UI JSON (parameter paths)
 - `get_run_params` -> return current run parameters by path
+- `get_polyphony()` -> get current polyphony (`0` means mono)
+- `set_polyphony(voices)` -> set polyphony (`0,1,2,4,8,16,32,64`; `0` means mono)
 - `set_run_param(path, value)` -> set one continuous parameter
 - `set_run_param_and_get_spectrum(path, value, settleMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> set parameter + capture spectrum-summary time series + max-hold aggregate
 - `run_transport(action)` -> `start`, `stop`, or `toggle`
 - `trigger_button(path, holdMs?)` -> safe press/release cycle
 - `trigger_button_and_get_spectrum(path, holdMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> trigger + spectrum-summary time series + max-hold aggregate
+- `midi_note_on(note, velocity?)` -> send MIDI note-on
+- `midi_note_off(note)` -> send MIDI note-off
+- `midi_note_pulse(note, velocity?, holdMs?)` -> send note-on then note-off automatically
 
 Spectrum behavior:
 - When audio is running in `run` view, the frontend pushes compact spectrum summaries to MCP state.
