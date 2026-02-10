@@ -130,6 +130,12 @@ main {
   cursor: not-allowed;
 }
 
+#refresh-session {
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.2rem 0.42rem;
+}
+
 .primary-btn {
   background: rgba(255, 255, 255, 0.12);
   color: #ccc;

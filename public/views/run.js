@@ -24,6 +24,8 @@ let controlsOrbitPane = null;
 let paramValues = {};
 let uiParamPaths = [];
 let uiButtonPaths = new Set();
+let uiButtonOrder = [];
+let lastUiButtonPath = null;
 let pressedUiButtons = new Set();
 let uiReleaseHandlersInstalled = false;
 let uiReleaseGuardHandler = null;
@@ -43,6 +45,10 @@ let midiKeyboardKeyUpHandler = null;
 let midiKeyboardBlurHandler = null;
 let midiComputerActiveNotes = new Map();
 let midiUiKeyByNote = new Map();
+let runSpaceKeyHandler = null;
+let runSpaceKeyUpHandler = null;
+let runSpaceBlurHandler = null;
+let runSpacePressedPath = null;
 let paramPollId = null;
 let outputParamHandlerAttached = false;
 let uiZoom = 'auto';
@@ -644,7 +650,11 @@ async function compileAndRenderUI(container, sha, voices = 0) {
   compiledUI = generator.getUI();
   seedParamValuesFromUiDefaults(compiledUI);
   uiParamPaths = collectParamPaths(compiledUI);
-  uiButtonPaths = collectButtonPaths(compiledUI);
+  uiButtonOrder = collectButtonPaths(compiledUI);
+  uiButtonPaths = new Set(uiButtonOrder);
+  if (lastUiButtonPath && !uiButtonPaths.has(lastUiButtonPath)) {
+    lastUiButtonPath = null;
+  }
   const hadLatchedButtons = normalizeLatchedButtonParams();
   pressedUiButtons.clear();
   if (hadLatchedButtons) {
@@ -1001,6 +1011,7 @@ async function renderFaustUi(container, ui) {
           forceSnapshot = true;
           if (value > 0) {
             pressedUiButtons.add(path);
+            lastUiButtonPath = path;
           } else {
             pressedUiButtons.delete(path);
           }
@@ -1020,6 +1031,7 @@ async function renderFaustUi(container, ui) {
     applyParamValues();
     resetUiButtonsToZero();
     installUiReleaseGuard();
+    installRunSpaceShortcut();
     setupUiZoomObserver();
     applyUiZoom();
   } catch (err) {
@@ -1727,7 +1739,7 @@ function clamp(value, min, max) {
 }
 
 function collectButtonPaths(ui) {
-  const paths = new Set();
+  const paths = [];
   if (!Array.isArray(ui)) return paths;
   const walk = (node) => {
     if (!node) return;
@@ -1738,20 +1750,99 @@ function collectButtonPaths(ui) {
     if (Array.isArray(node.items)) node.items.forEach(walk);
     if (node.type === 'button') {
       const address = node.address || node.path;
-      if (address) paths.add(address);
+      if (address && !paths.includes(address)) paths.push(address);
     }
   };
   walk(ui);
   return paths;
 }
 
+function installRunSpaceShortcut() {
+  if (runSpaceKeyHandler || runSpaceKeyUpHandler) return;
+  runSpaceKeyHandler = async (event) => {
+    if (event.defaultPrevented) return;
+    if (event.code !== 'Space') return;
+    if (event.repeat) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (isTypingTarget(event.target) || isTypingTarget(document.activeElement)) return;
+    const targetPath =
+      (lastUiButtonPath && uiButtonPaths.has(lastUiButtonPath) ? lastUiButtonPath : null) ||
+      (uiButtonOrder.length > 0 ? uiButtonOrder[0] : null);
+    if (!targetPath) return;
+    event.preventDefault();
+    if (runSpacePressedPath) return;
+    if (!audioRunning && typeof outputNode !== 'undefined') {
+      startAudioOutput();
+    }
+    runSpacePressedPath = targetPath;
+    pressedUiButtons.add(targetPath);
+    setParamValue(targetPath, 1, { skipSnapshot: true });
+    sendRunParamsSnapshot(true);
+  };
+  runSpaceKeyUpHandler = (event) => {
+    if (event.code !== 'Space') return;
+    if (!runSpacePressedPath) return;
+    event.preventDefault();
+    const path = runSpacePressedPath;
+    runSpacePressedPath = null;
+    pressedUiButtons.delete(path);
+    setParamValue(path, 0, { skipSnapshot: true });
+    sendRunParamsSnapshot(true);
+  };
+  runSpaceBlurHandler = () => {
+    if (!runSpacePressedPath) return;
+    const path = runSpacePressedPath;
+    runSpacePressedPath = null;
+    pressedUiButtons.delete(path);
+    setParamValue(path, 0, { skipSnapshot: true });
+    sendRunParamsSnapshot(true);
+  };
+  window.addEventListener('keydown', runSpaceKeyHandler);
+  window.addEventListener('keyup', runSpaceKeyUpHandler);
+  window.addEventListener('blur', runSpaceBlurHandler, true);
+}
+
+function uninstallRunSpaceShortcut() {
+  if (runSpaceKeyHandler) {
+    window.removeEventListener('keydown', runSpaceKeyHandler);
+    runSpaceKeyHandler = null;
+  }
+  if (runSpaceKeyUpHandler) {
+    window.removeEventListener('keyup', runSpaceKeyUpHandler);
+    runSpaceKeyUpHandler = null;
+  }
+  if (runSpaceBlurHandler) {
+    window.removeEventListener('blur', runSpaceBlurHandler, true);
+    runSpaceBlurHandler = null;
+  }
+  if (runSpacePressedPath) {
+    const path = runSpacePressedPath;
+    runSpacePressedPath = null;
+    pressedUiButtons.delete(path);
+    setParamValue(path, 0, { skipSnapshot: true });
+    sendRunParamsSnapshot(true);
+  }
+}
+
 function releasePressedUiButtons() {
   if (pressedUiButtons.size === 0) return;
+  const protectedPath = runSpacePressedPath;
+  let releasedAny = false;
   for (const path of Array.from(pressedUiButtons)) {
+    if (protectedPath && path === protectedPath) {
+      continue;
+    }
     setParamValue(path, 0);
+    releasedAny = true;
   }
-  pressedUiButtons.clear();
-  sendRunParamsSnapshot(true);
+  if (protectedPath) {
+    pressedUiButtons = new Set([protectedPath]);
+  } else {
+    pressedUiButtons.clear();
+  }
+  if (releasedAny) {
+    sendRunParamsSnapshot(true);
+  }
 }
 
 function installUiReleaseGuard() {
@@ -2616,6 +2707,7 @@ function applyRunState(runState, controls) {
 }
 
 export function dispose() {
+  uninstallRunSpaceShortcut();
   detachComputerMidiKeyboard();
   releasePressedUiButtons();
   uninstallUiReleaseGuard();
@@ -2631,6 +2723,8 @@ export function dispose() {
   midiInput = null;
   uiParamPaths = [];
   uiButtonPaths = new Set();
+  uiButtonOrder = [];
+  lastUiButtonPath = null;
   pressedUiButtons.clear();
   stopParamPolling();
   outputParamHandlerAttached = false;

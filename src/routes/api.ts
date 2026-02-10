@@ -34,32 +34,120 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     dirName: string,
     outFile: string
   ): Promise<{ success: boolean; errors: string; zipPath?: string }> {
+    const dirPath = path.join(sessionPath, dirName);
+    if (!fs.existsSync(dirPath)) {
+      return { success: false, errors: 'Directory not found' };
+    }
+
+    const zipPath = path.join(sessionPath, outFile);
+    const zipped = await createZipArchive(sessionPath, zipPath, dirName);
+    if (!zipped.success || !fs.existsSync(zipPath)) {
+      return { success: false, errors: zipped.errors || 'Zip failed' };
+    }
+    return { success: true, errors: '', zipPath };
+  }
+
+  async function zipFromDirectory(
+    sourceDir: string,
+    outZipPath: string
+  ): Promise<{ success: boolean; errors: string }> {
+    return createZipArchive(sourceDir, outZipPath, '.');
+  }
+
+  async function createZipArchive(
+    cwd: string,
+    outZipPath: string,
+    targetPath: string
+  ): Promise<{ success: boolean; errors: string }> {
+    const zipCmd = await runZipCommand(cwd, outZipPath, targetPath);
+    if (zipCmd.success) {
+      return zipCmd;
+    }
+    if (!zipCmd.notFound) {
+      return zipCmd;
+    }
+
+    // Fallback when `zip` is not installed (e.g. minimal docker images).
+    return runPythonZip(cwd, outZipPath, targetPath);
+  }
+
+  async function runZipCommand(
+    cwd: string,
+    outZipPath: string,
+    targetPath: string
+  ): Promise<{ success: boolean; errors: string; notFound?: boolean }> {
     return new Promise((resolve) => {
-      const dirPath = path.join(sessionPath, dirName);
-      if (!fs.existsSync(dirPath)) {
-        resolve({ success: false, errors: 'Directory not found' });
-        return;
-      }
-
-      const zipPath = path.join(sessionPath, outFile);
-      const args = ['-r', '-q', outFile, dirName];
-      const proc = spawn('zip', args, { cwd: sessionPath });
-
+      const args = ['-r', '-q', outZipPath, targetPath];
+      const proc = spawn('zip', args, { cwd });
       let stderr = '';
+
       proc.stderr.on('data', (data) => {
         stderr += data.toString();
       });
 
       proc.on('close', (code) => {
-        if (code !== 0 || !fs.existsSync(zipPath)) {
+        if (code !== 0 || !fs.existsSync(outZipPath)) {
           resolve({ success: false, errors: stderr || 'Zip failed' });
           return;
         }
-        resolve({ success: true, errors: '', zipPath });
+        resolve({ success: true, errors: '' });
       });
 
-      proc.on('error', (err) => {
+      proc.on('error', (err: NodeJS.ErrnoException) => {
+        if (err && err.code === 'ENOENT') {
+          resolve({ success: false, errors: 'zip command not found', notFound: true });
+          return;
+        }
         resolve({ success: false, errors: `Zip error: ${err.message}` });
+      });
+    });
+  }
+
+  async function runPythonZip(
+    cwd: string,
+    outZipPath: string,
+    targetPath: string
+  ): Promise<{ success: boolean; errors: string }> {
+    return new Promise((resolve) => {
+      const pythonCode = [
+        'import os, sys, zipfile',
+        'base = sys.argv[1]',
+        'out_path = sys.argv[2]',
+        'target = sys.argv[3]',
+        "target_path = os.path.normpath(os.path.join(base, target))",
+        'if not os.path.exists(target_path):',
+        "    print('Target not found', file=sys.stderr)",
+        '    sys.exit(2)',
+        "zf = zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED)",
+        'if os.path.isfile(target_path):',
+        '    rel = os.path.relpath(target_path, base)',
+        '    zf.write(target_path, rel)',
+        'else:',
+        '    for root, _dirs, files in os.walk(target_path):',
+        '        for name in files:',
+        '            full = os.path.join(root, name)',
+        '            rel = os.path.relpath(full, base)',
+        '            zf.write(full, rel)',
+        'zf.close()'
+      ].join('; ');
+      const proc = spawn('python3', ['-c', pythonCode, cwd, outZipPath, targetPath], { cwd });
+      let stderr = '';
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      proc.on('close', (code) => {
+        if (code !== 0 || !fs.existsSync(outZipPath)) {
+          resolve({ success: false, errors: stderr || 'Zip failed (python fallback)' });
+          return;
+        }
+        resolve({ success: true, errors: '' });
+      });
+      proc.on('error', (err: NodeJS.ErrnoException) => {
+        if (err && err.code === 'ENOENT') {
+          resolve({ success: false, errors: 'Neither zip nor python3 is available to create archives' });
+          return;
+        }
+        resolve({ success: false, errors: `Python zip error: ${err.message}` });
       });
     });
   }
@@ -880,6 +968,65 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
 
     const base = session.filename.replace(/\.dsp$/i, '') || 'session';
     res.download(result.zipPath, `${base}-pwa.zip`);
+  });
+
+  /**
+   * GET /download/archive/dsp
+   * Télécharge une archive ZIP de tous les fichiers DSP des sessions.
+   */
+  router.get('/download/archive/dsp', async (_req: Request, res: Response) => {
+    const tempBase = fs.existsSync(sessionsBaseDir) ? sessionsBaseDir : osTmpFallback();
+    const tempRoot = fs.mkdtempSync(path.join(tempBase, 'faust-archive-'));
+    const stagingDir = path.join(tempRoot, 'dsp-archive');
+    const zipPath = path.join(tempRoot, 'faustforge-dsp-archive.zip');
+    fs.mkdirSync(stagingDir, { recursive: true });
+
+    try {
+      const sessions = sessionManager.listSessionsByCreation();
+      let copied = 0;
+
+      for (const session of sessions) {
+        const sessionDir = path.join(sessionsBaseDir, session.sha1);
+        const sourceDsp = path.join(sessionDir, 'sourcecode', session.filename);
+        const fallbackDsp = path.join(sessionDir, 'user_code.dsp');
+        const sessionOutDir = path.join(stagingDir, session.sha1);
+        fs.mkdirSync(sessionOutDir, { recursive: true });
+
+        if (fs.existsSync(sourceDsp)) {
+          fs.copyFileSync(sourceDsp, path.join(sessionOutDir, session.filename));
+          copied += 1;
+          continue;
+        }
+
+        if (fs.existsSync(fallbackDsp)) {
+          const fallbackName = session.filename && session.filename.endsWith('.dsp')
+            ? session.filename
+            : 'user_code.dsp';
+          fs.copyFileSync(fallbackDsp, path.join(sessionOutDir, fallbackName));
+          copied += 1;
+        }
+      }
+
+      if (copied === 0) {
+        res.status(404).json({ error: 'No DSP files found to archive' });
+        return;
+      }
+
+      const zipped = await zipFromDirectory(stagingDir, zipPath);
+      if (!zipped.success) {
+        res.status(500).json({ error: zipped.errors || 'Archive generation failed' });
+        return;
+      }
+
+      res.download(zipPath, 'faustforge-dsp-archive.zip');
+    } finally {
+      res.on('finish', () => {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      });
+      res.on('close', () => {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      });
+    }
   });
 
   /**

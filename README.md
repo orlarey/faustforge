@@ -238,7 +238,7 @@ Faust library documentation tools:
 - The Docker image ships with a prebuilt Faust doc index generated from `faustwasm` stdlib (`/usr/share/faust/stdfaust.lib`).
 - No runtime fallback: MCP expects this prebuilt index to be present in the image.
 - `search_faust_lib(query, limit?, module?)` -> search symbols without loading full docs in context
-- `get_faust_symbol(symbol)` -> full symbol entry (summary, usage, params, test snippet, source)
+- `get_faust_symbol(symbol)` -> full symbol entry (summary, usage/signature, params, io with `inSignals`/`outSignals` when derivable, test snippet, source)
 - `list_faust_module(module, limit?)` -> list symbols from one module (e.g. `delays`, `filters`)
 - `get_faust_examples(symbolOrModule, limit?)` -> retrieve test/example snippets
 - `explain_faust_symbol_for_goal(symbol, goal)` -> action-oriented guidance for a concrete DSP objective

@@ -44,11 +44,14 @@ const footerVersion = document.getElementById('footer-version');
 const headerAppVersion = document.getElementById('header-app-version');
 const deleteSessionBtn = document.getElementById('delete-session');
 const refreshSessionBtn = document.getElementById('refresh-session');
+const archiveBtn = document.getElementById('archive-btn');
 const audioGate = document.getElementById('audio-gate');
 const audioGateButton = document.getElementById('audio-gate-button');
 const audioGateStatus = document.getElementById('audio-gate-status');
 let lastStateTs = 0;
 let pasteSink = null;
+let localViewStickyUntil = 0;
+let lastLocalViewResyncAt = 0;
 
 /**
  * Charge dynamiquement les modules de vue
@@ -93,7 +96,9 @@ function generateViewSelect() {
 /**
  * Change la vue active
  */
-async function switchView(viewId) {
+async function switchView(viewId, options = {}) {
+  const isRemote = options && options.source === 'remote';
+  const persist = options && options.persist === false ? false : true;
   hideError();
   if (viewId !== state.currentView) {
     captureScrollLine();
@@ -112,8 +117,15 @@ async function switchView(viewId) {
     viewSelect.value = viewId;
   }
 
+  if (!isRemote) {
+    // Protect against transient POST failures that could make pollState restore an old remote view.
+    localViewStickyUntil = Date.now() + 8000;
+  }
+
   // Persist view first to avoid race with Run view state updates (/api/state).
-  await syncState({ view: viewId });
+  if (persist) {
+    await syncState({ view: viewId });
+  }
 
   // Afficher la vue
   await renderCurrentView();
@@ -610,6 +622,22 @@ async function copyToClipboard(text) {
   }
 }
 
+async function downloadFromUrl(url, filename, fallbackError = 'Download failed') {
+  const response = await fetch(url);
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    throw new Error(result.error || fallbackError);
+  }
+  const blob = await response.blob();
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
+}
+
 // Event listeners
 if (downloadBtn) {
   downloadBtn.addEventListener('click', async () => {
@@ -639,19 +667,18 @@ if (downloadBtn) {
     }
 
     try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        const result = await response.json().catch(() => ({}));
-        throw new Error(result.error || 'Download failed');
-      }
-      const blob = await response.blob();
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(link.href);
+      await downloadFromUrl(url, filename, 'Download failed');
+    } catch (err) {
+      showError(`Error: ${err.message}`);
+    }
+  });
+}
+
+if (archiveBtn) {
+  archiveBtn.addEventListener('click', async () => {
+    try {
+      await downloadFromUrl('/api/download/archive/dsp', 'faustforge-dsp-archive.zip', 'Archive failed');
+      hideError();
     } catch (err) {
       showError(`Error: ${err.message}`);
     }
@@ -695,7 +722,18 @@ async function pollState() {
     }
 
     if (remote.view && remote.view !== state.currentView) {
-      await switchView(remote.view);
+      const now = Date.now();
+      if (now < localViewStickyUntil) {
+        // Keep local choice authoritative for a short window after user view changes.
+        if (now - lastLocalViewResyncAt > 1200) {
+          lastLocalViewResyncAt = now;
+          syncState({ view: state.currentView });
+        }
+      } else {
+        await switchView(remote.view, { source: 'remote', persist: false });
+      }
+    } else if (remote.view === state.currentView) {
+      localViewStickyUntil = 0;
     }
 
     if (remote.sha1 && remote.sha1 !== state.currentSha) {
