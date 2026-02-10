@@ -66,6 +66,14 @@ let lastRunOrbitSentAt = 0;
 let pendingOrbitUi = null;
 let orbitBaseWidth = 0;
 let orbitBaseHeight = 0;
+let lastOrbitParamSyncAt = 0;
+let orbitParamSyncTimer = null;
+let remoteSyncInFlight = false;
+const PARAM_SMOOTH_INTERVAL_MS = 16;
+const PARAM_SMOOTH_EPSILON = 1e-4;
+const ORBIT_PARAM_SYNC_INTERVAL_MS = 33;
+const ORBIT_POSITION_EPSILON = 0.25;
+const paramSmooth = new Map();
 
 export function getName() {
   return 'Run';
@@ -432,7 +440,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
 
   controlsEl.addEventListener('click', handleRunAreaClick);
 
-  remoteSyncTimer = setInterval(syncRemoteRunState, 100);
+  remoteSyncTimer = setInterval(syncRemoteRunState, 120);
   await syncRemoteRunState();
 
   await updateMidi();
@@ -474,8 +482,10 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     }
   }
 
-  async function syncRemoteRunState() {
+async function syncRemoteRunState() {
     if (!currentSha) return;
+    if (remoteSyncInFlight) return;
+    remoteSyncInFlight = true;
     try {
       const response = await fetch('/api/state');
       if (!response.ok) return;
@@ -551,6 +561,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       }
     } catch {
       // ignore sync errors
+    } finally {
+      remoteSyncInFlight = false;
     }
   }
 }
@@ -607,6 +619,7 @@ async function compileAndRenderUI(container, sha, voices = 0) {
   compiledGenerator = generator;
   compiledGeneratorMode = voices > 0 ? `poly:${voices}` : 'mono';
   compiledUI = generator.getUI();
+  seedParamValuesFromUiDefaults(compiledUI);
   uiParamPaths = collectParamPaths(compiledUI);
   uiButtonPaths = collectButtonPaths(compiledUI);
   const hadLatchedButtons = normalizeLatchedButtonParams();
@@ -662,6 +675,25 @@ function collectParamPaths(ui) {
   };
   walk(ui);
   return paths;
+}
+
+function seedParamValuesFromUiDefaults(ui) {
+  if (!Array.isArray(ui)) return;
+  const walk = (node) => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (Array.isArray(node.items)) node.items.forEach(walk);
+    const path = node.address || node.path;
+    if (!path) return;
+    const init = node.init;
+    if (!Number.isFinite(init)) return;
+    if (typeof paramValues[path] === 'number' && Number.isFinite(paramValues[path])) return;
+    paramValues[path] = Number(init);
+  };
+  walk(ui);
 }
 
 function renderMidiKeyboard(container, ui, handlers) {
@@ -802,11 +834,9 @@ async function renderFaustUi(container, ui) {
     });
 
     faustUIInstance.paramChangeByUI = (path, value) => {
-      if (!dspNode) return;
       try {
-        dspNode.setParamValue(path, value);
-        paramValues[path] = value;
         let forceSnapshot = false;
+        const isButton = uiButtonPaths.has(path);
         if (uiButtonPaths.has(path)) {
           forceSnapshot = true;
           if (value > 0) {
@@ -815,9 +845,13 @@ async function renderFaustUi(container, ui) {
             pressedUiButtons.delete(path);
           }
         }
-        sendRunParamsSnapshot(forceSnapshot);
-        syncOrbitFromParams();
-        if (emitRunStateFn) emitRunStateFn();
+        setParamValue(path, value, {
+          smooth: !isButton,
+          skipSnapshot: isButton
+        });
+        if (forceSnapshot) {
+          sendRunParamsSnapshot(true);
+        }
       } catch {
         // ignore
       }
@@ -877,7 +911,7 @@ function renderOrbitUi(container, ui) {
   const sliders = collectOrbitSliders(ui);
   initOrbitState(sliders, pendingOrbitUi);
   installOrbitPointerHandlers();
-  syncOrbitFromParams();
+  requestOrbitSyncFromParams(true);
   drawOrbitNow();
   sendRunOrbitSnapshot(true);
 }
@@ -1065,6 +1099,20 @@ function installOrbitPointerHandlers() {
   };
   orbitCanvas.onpointerup = (event) => {
     if (!orbitPointer || event.pointerId !== orbitPointer.pointerId) return;
+    if (orbitPointer.mode === 'slider' && orbitPointer.path) {
+      const path = orbitPointer.path;
+      const value = paramValues[path];
+      if (typeof value === 'number') {
+        applyParamToDsp(path, value, { smooth: true, commit: true });
+      }
+    } else if (orbitPointer.mode === 'center' && orbitState) {
+      for (const slider of orbitState.sliders) {
+        const value = paramValues[slider.path];
+        if (typeof value === 'number') {
+          applyParamToDsp(slider.path, value, { smooth: true, commit: true });
+        }
+      }
+    }
     orbitPointer = null;
     sendRunOrbitSnapshot(true);
   };
@@ -1112,7 +1160,8 @@ function applyOrbitValueForPath(path) {
   setParamValue(path, value, {
     skipSnapshot: true,
     skipEmit: true,
-    skipOrbitSync: true
+    skipOrbitSync: true,
+    smooth: true
   });
   sendRunParamsSnapshot();
   if (emitRunStateFn) emitRunStateFn();
@@ -1127,7 +1176,8 @@ function applyOrbitValuesForAll() {
     setParamValue(slider.path, value, {
       skipSnapshot: true,
       skipEmit: true,
-      skipOrbitSync: true
+      skipOrbitSync: true,
+      smooth: true
     });
   }
   sendRunParamsSnapshot();
@@ -1164,10 +1214,11 @@ function syncOrbitFromParams() {
   if (orbitPointer) {
     // During any local drag, icon positions are user-authoritative.
     // This prevents unrelated icon motion while dragging one slider or the center.
-    return;
+    return false;
   }
   const sliders = orbitState.sliders;
   const count = Math.max(1, sliders.length);
+  let changed = false;
   sliders.forEach((slider, index) => {
     const raw = paramValues[slider.path];
     const current = Number.isFinite(raw) ? raw : slider.min;
@@ -1185,12 +1236,44 @@ function syncOrbitFromParams() {
       dx /= mag;
       dy /= mag;
     }
-    orbitState.positions[slider.path] = {
-      x: clamp(orbitState.center.x + dx * distance, 0, orbitState.width),
-      y: clamp(orbitState.center.y + dy * distance, 0, orbitState.height)
-    };
+    const nextX = clamp(orbitState.center.x + dx * distance, 0, orbitState.width);
+    const nextY = clamp(orbitState.center.y + dy * distance, 0, orbitState.height);
+    const prev = orbitState.positions[slider.path];
+    if (!prev || Math.abs(prev.x - nextX) > ORBIT_POSITION_EPSILON || Math.abs(prev.y - nextY) > ORBIT_POSITION_EPSILON) {
+      orbitState.positions[slider.path] = { x: nextX, y: nextY };
+      changed = true;
+    }
   });
-  scheduleOrbitDraw();
+  if (changed) {
+    scheduleOrbitDraw();
+  }
+  return changed;
+}
+
+function requestOrbitSyncFromParams(force = false) {
+  if (!orbitState) return;
+  if (force) {
+    if (orbitParamSyncTimer) {
+      clearTimeout(orbitParamSyncTimer);
+      orbitParamSyncTimer = null;
+    }
+    lastOrbitParamSyncAt = Date.now();
+    syncOrbitFromParams();
+    return;
+  }
+  const now = Date.now();
+  const elapsed = now - lastOrbitParamSyncAt;
+  if (elapsed >= ORBIT_PARAM_SYNC_INTERVAL_MS) {
+    lastOrbitParamSyncAt = now;
+    syncOrbitFromParams();
+    return;
+  }
+  if (orbitParamSyncTimer) return;
+  orbitParamSyncTimer = setTimeout(() => {
+    orbitParamSyncTimer = null;
+    lastOrbitParamSyncAt = Date.now();
+    syncOrbitFromParams();
+  }, Math.max(0, ORBIT_PARAM_SYNC_INTERVAL_MS - elapsed));
 }
 
 function drawOrbitNow() {
@@ -1538,11 +1621,11 @@ function setParamValue(path, value, options = {}) {
   const skipSnapshot = options && options.skipSnapshot === true;
   const skipEmit = options && options.skipEmit === true;
   const skipOrbitSync = options && options.skipOrbitSync === true;
+  const smooth = options && options.smooth === true;
+  const commit = options && options.commit === true;
   if (paramValues[path] === value) return;
   try {
-    if (dspNode) {
-      dspNode.setParamValue(path, value);
-    }
+    applyParamToDsp(path, value, { smooth, commit });
     paramValues[path] = value;
     if (faustUIInstance) {
       faustUIInstance.paramChangeByDSP(path, value);
@@ -1551,11 +1634,102 @@ function setParamValue(path, value, options = {}) {
       sendRunParamsSnapshot();
     }
     if (!skipOrbitSync) {
-      syncOrbitFromParams();
+      requestOrbitSyncFromParams();
     }
     if (!skipEmit && emitRunStateFn) emitRunStateFn();
   } catch {
     // ignore
+  }
+}
+
+function applyParamToDsp(path, value, options = {}) {
+  if (!dspNode) return;
+  const smooth = options && options.smooth === true;
+  const commit = options && options.commit === true;
+  if (!smooth || uiButtonPaths.has(path)) {
+    clearParamSmooth(path);
+    try {
+      dspNode.setParamValue(path, value);
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  const now = Date.now();
+  let entry = paramSmooth.get(path);
+  if (!entry) {
+    entry = {
+      lastSentAt: 0,
+      lastSentValue: undefined,
+      pendingValue: undefined,
+      timer: null
+    };
+    paramSmooth.set(path, entry);
+  }
+
+  const sendNow = (targetValue) => {
+    if (!dspNode) return;
+    if (
+      typeof entry.lastSentValue === 'number' &&
+      Math.abs(targetValue - entry.lastSentValue) < PARAM_SMOOTH_EPSILON
+    ) {
+      return;
+    }
+    try {
+      dspNode.setParamValue(path, targetValue);
+      entry.lastSentAt = Date.now();
+      entry.lastSentValue = targetValue;
+    } catch {
+      // ignore
+    }
+  };
+
+  if (commit) {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+      entry.timer = null;
+    }
+    entry.pendingValue = undefined;
+    sendNow(value);
+    return;
+  }
+
+  const elapsed = now - entry.lastSentAt;
+  if (elapsed >= PARAM_SMOOTH_INTERVAL_MS) {
+    sendNow(value);
+    return;
+  }
+
+  entry.pendingValue = value;
+  if (!entry.timer) {
+    const wait = Math.max(0, PARAM_SMOOTH_INTERVAL_MS - elapsed);
+    entry.timer = setTimeout(() => {
+      entry.timer = null;
+      if (typeof entry.pendingValue === 'number') {
+        const target = entry.pendingValue;
+        entry.pendingValue = undefined;
+        sendNow(target);
+      }
+    }, wait);
+  }
+}
+
+function clearParamSmooth(path) {
+  const entry = paramSmooth.get(path);
+  if (!entry) return;
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+  }
+  paramSmooth.delete(path);
+}
+
+function clearAllParamSmoothing() {
+  for (const [path, entry] of paramSmooth.entries()) {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+    paramSmooth.delete(path);
   }
 }
 
@@ -1583,7 +1757,7 @@ function applyRemoteRunParams(remoteParams) {
     }
   }
   if (changed) {
-    syncOrbitFromParams();
+    requestOrbitSyncFromParams();
     if (emitRunStateFn) emitRunStateFn();
     sendRunParamsSnapshot();
   }
@@ -1655,7 +1829,7 @@ function applyParamValues() {
       // ignore
     }
   }
-  syncOrbitFromParams();
+  requestOrbitSyncFromParams(true);
 }
 
 function normalizeRestoredParamValue(path, value) {
@@ -1705,11 +1879,14 @@ function attachOutputParamHandler() {
   if (!dspNode || typeof dspNode.setOutputParamHandler !== 'function') return;
   dspNode.setOutputParamHandler((path, value) => {
     if (typeof value !== 'number' || Number.isNaN(value)) return;
+    if (typeof paramValues[path] === 'number' && Math.abs(paramValues[path] - value) < PARAM_SMOOTH_EPSILON) {
+      return;
+    }
     paramValues[path] = value;
     if (faustUIInstance) {
       faustUIInstance.paramChangeByDSP(path, value);
     }
-    syncOrbitFromParams();
+    requestOrbitSyncFromParams();
     sendRunParamsSnapshot();
     if (emitRunStateFn) emitRunStateFn();
   });
@@ -1725,20 +1902,24 @@ function startParamPolling() {
   if (paths.length === 0) return;
   paramPollId = setInterval(() => {
     if (!dspNode || !faustUIInstance) return;
+    let changed = false;
     for (const path of paths) {
       try {
         const value = dspNode.getParamValue(path);
         if (typeof value !== 'number' || Number.isNaN(value)) continue;
-        if (paramValues[path] !== value) {
+        if (typeof paramValues[path] !== 'number' || Math.abs(paramValues[path] - value) >= PARAM_SMOOTH_EPSILON) {
           paramValues[path] = value;
           faustUIInstance.paramChangeByDSP(path, value);
+          changed = true;
         }
       } catch {
         // ignore
       }
     }
-    syncOrbitFromParams();
-    if (emitRunStateFn) emitRunStateFn();
+    if (changed) {
+      requestOrbitSyncFromParams();
+      if (emitRunStateFn) emitRunStateFn();
+    }
   }, 150);
 }
 
@@ -2153,6 +2334,12 @@ export function dispose() {
   orbitNeedsDraw = false;
   orbitBaseWidth = 0;
   orbitBaseHeight = 0;
+  lastOrbitParamSyncAt = 0;
+  if (orbitParamSyncTimer) {
+    clearTimeout(orbitParamSyncTimer);
+    orbitParamSyncTimer = null;
+  }
+  remoteSyncInFlight = false;
   controlsSplit = null;
   controlsClassicPane = null;
   controlsOrbitPane = null;
@@ -2164,6 +2351,7 @@ export function dispose() {
   lastAppliedRemoteOrbitNonce = 0;
   pendingOrbitUi = null;
   lastSpectrumSummary = null;
+  clearAllParamSmoothing();
 }
 
 function cleanupAudio() {
@@ -2200,6 +2388,7 @@ function cleanupAudio() {
   teardownUiZoomObserver();
   uiZoomWrap = null;
   uiZoomStage = null;
+  clearAllParamSmoothing();
 }
 
 function createScopeState(canvas) {
