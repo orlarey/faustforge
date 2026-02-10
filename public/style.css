@@ -804,6 +804,12 @@ footer {
   font-size: 0.8rem;
 }
 
+.run-midi-inline {
+  display: flex;
+  align-items: center;
+  margin-left: 0.2rem;
+}
+
 .run-mode select {
   background: #1a1a1a;
   color: #b0b0b0;
@@ -844,6 +850,11 @@ footer {
   justify-content: center;
 }
 
+.midi-keyboard-compact {
+  gap: 0.15rem;
+  flex-wrap: nowrap;
+}
+
 .midi-key {
   font-size: 0.7rem;
   padding: 0.35rem 0.45rem;
@@ -855,6 +866,12 @@ footer {
   user-select: none;
 }
 
+.midi-keyboard-compact .midi-key {
+  font-size: 0.62rem;
+  padding: 0.18rem 0.28rem;
+  min-width: 1.5rem;
+}
+
 .midi-key.black {
   background: #2b2b2b;
   color: #e5e5e5;
@@ -863,6 +880,16 @@ footer {
 
 .midi-key:active {
   transform: translateY(1px);
+}
+
+.midi-key.active {
+  transform: translateY(1px);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  filter: brightness(0.9);
+}
+
+.midi-key.black.active {
+  filter: brightness(1.25);
 }
 
 .midi-hint {

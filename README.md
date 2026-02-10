@@ -1,5 +1,5 @@
 # faustforge
-Web UI + MCP server for Faust prototyping, intended to run with Docker.
+Docker-first web UI + MCP server for Faust prototyping, featuring an Orbit UI for expressive multi-parameter exploration and tight AI-in-the-loop iteration.
 
 ## Quick Start (Docker)
 
@@ -106,10 +106,30 @@ You can:
 Go to `run` view to:
 
 - start/stop audio
-- interact with controls
+- interact with controls in `Regular UI` and `Orbit UI`
+- play notes from the virtual MIDI keyboard in the top bar (`A W S E D F T G Y H U J`, octave `Z/X`)
 - use MCP tools against the same active session
 
 ![Run view](docs/screenshots/05-run.png)
+
+#### Orbit UI behavior
+
+Orbit UI is a 2D control space for fast exploration of many parameters at once.
+
+- Each slider is an icon around a central point.
+- Slider value depends on icon distance to center:
+  - on/inside inner disk: maximum
+  - outside outer circle: minimum
+  - between both: linear interpolation
+- Drag a slider icon: changes only this slider (if active).
+- Drag the center: changes all active sliders at once.
+- Drag the outer circle ring (`grab` cursor): changes outer radius and updates all active sliders.
+- `Shift+click` an icon: toggle slider active/disabled.
+  - disabled slider is shown in dark gray
+  - can move visually, but does not affect DSP parameter
+  - ignored by center/radius gestures
+  - ignored by parameter-to-orbit sync
+- In polyphonic mode, frequency/gain-like sliders are auto-disabled to avoid conflicting controls.
 
 ### 6) Analyze graphs
 

@@ -38,6 +38,11 @@ let midiAccess = null;
 let midiSource = 'virtual';
 let midiInput = null;
 let midiOnly = true;
+let midiKeyboardKeyDownHandler = null;
+let midiKeyboardKeyUpHandler = null;
+let midiKeyboardBlurHandler = null;
+let midiComputerActiveNotes = new Map();
+let midiUiKeyByNote = new Map();
 let paramPollId = null;
 let outputParamHandlerAttached = false;
 let uiZoom = 'auto';
@@ -107,13 +112,13 @@ export async function render(container, { sha, runState, onRunStateChange }) {
         <label class="run-midi-source">MIDI
           <select id="midi-input"></select>
         </label>
+        <div class="run-midi-inline hidden" id="run-midi-inline"></div>
         <div class="spacer"></div>
         <span class="run-note">FaustWASM</span>
       </div>
       <div class="run-controls" id="run-controls">
         <div class="info">Compiling...</div>
       </div>
-      <div class="run-midi hidden" id="run-midi"></div>
       <div class="run-scope">
         <div class="run-scope-header">
           <span>Oscilloscope</span>
@@ -159,8 +164,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   const statusEl = container.querySelector('.run-status');
   const modeSelect = container.querySelector('#run-mode');
   const midiInputSelect = container.querySelector('#midi-input');
+  const midiInlineEl = container.querySelector('#run-midi-inline');
   const controlsEl = container.querySelector('#run-controls');
-  const midiEl = container.querySelector('#run-midi');
   const scopeCanvas = container.querySelector('#scope-canvas');
   const scopeView = container.querySelector('#scope-view');
   const scopeScale = container.querySelector('#scope-scale');
@@ -240,19 +245,32 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     emitRunState();
   });
 
+  const renderInlineVirtualKeyboard = () => {
+    if (!midiInlineEl) return;
+    renderMidiKeyboard(midiInlineEl, compiledUI, {
+      noteOn: async (note, velocity) => {
+        if (!audioRunning) await startAudio();
+        noteOnMidi(note, velocity);
+      },
+      noteOff: (note) => noteOffMidi(note)
+    }, { compact: true, showHint: false, showEmptyMessage: false });
+  };
+
   const updateMidi = async () => {
-    if (!midiEl) return;
+    if (!midiInlineEl) return;
     if (polyVoices > 0) {
-      midiEl.classList.remove('hidden');
-      renderMidiKeyboard(midiEl, compiledUI, {
-        noteOn: async (note, velocity) => {
-          if (!audioRunning) await startAudio();
-          noteOnMidi(note, velocity);
-        },
-        noteOff: (note) => noteOffMidi(note)
-      });
+      renderInlineVirtualKeyboard();
+      if (midiSource === 'virtual') {
+        midiInlineEl.classList.remove('hidden');
+      } else {
+        midiInlineEl.classList.add('hidden');
+        midiInlineEl.innerHTML = '';
+        detachComputerMidiKeyboard();
+      }
     } else {
-      midiEl.classList.add('hidden');
+      midiInlineEl.classList.add('hidden');
+      midiInlineEl.innerHTML = '';
+      detachComputerMidiKeyboard();
       noteOffMidi();
     }
     await updateMidiSourceUi();
@@ -268,10 +286,15 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     if (value === 'virtual') {
       disconnectMidiDevice();
       if (polyVoices > 0) {
-        midiEl.classList.remove('hidden');
+        midiInlineEl.classList.remove('hidden');
+        if (!midiInlineEl.firstElementChild) {
+          renderInlineVirtualKeyboard();
+        }
       }
     } else {
-      midiEl.classList.add('hidden');
+      midiInlineEl.classList.add('hidden');
+      midiInlineEl.innerHTML = '';
+      detachComputerMidiKeyboard();
       await selectMidiDevice(value);
     }
     midiOnly = true;
@@ -696,19 +719,25 @@ function seedParamValuesFromUiDefaults(ui) {
   walk(ui);
 }
 
-function renderMidiKeyboard(container, ui, handlers) {
+function renderMidiKeyboard(container, ui, handlers, options = {}) {
   if (!container) return;
+  detachComputerMidiKeyboard();
+  const compact = options && options.compact === true;
+  const showHint = options ? options.showHint !== false : true;
+  const showEmptyMessage = options ? options.showEmptyMessage !== false : true;
   const targets = findMidiTargets(ui);
   midiTargets = targets;
   container.innerHTML = '';
 
   if (!targets || (!targets.freq && !targets.key && !targets.gate)) {
-    container.innerHTML = '<div class="info">No MIDI parameters detected.</div>';
+    if (showEmptyMessage) {
+      container.innerHTML = '<div class="info">No MIDI parameters detected.</div>';
+    }
     return;
   }
 
   const keyboard = document.createElement('div');
-  keyboard.className = 'midi-keyboard';
+  keyboard.className = compact ? 'midi-keyboard midi-keyboard-compact' : 'midi-keyboard';
   const notes = [
     { note: 60, label: 'C4', black: false },
     { note: 61, label: 'C#', black: true },
@@ -731,11 +760,13 @@ function renderMidiKeyboard(container, ui, handlers) {
     key.dataset.note = String(entry.note);
     key.textContent = entry.label;
     keyboard.appendChild(key);
+    midiUiKeyByNote.set(entry.note, key);
   });
 
   const noteOn = async (note) => {
     if (activeMidiNote !== null) return;
     activeMidiNote = note;
+    setMidiUiKeyActive(note, true);
     if (handlers && handlers.noteOn) {
       await handlers.noteOn(note, 0.8);
     }
@@ -744,6 +775,7 @@ function renderMidiKeyboard(container, ui, handlers) {
     if (activeMidiNote === null) return;
     const note = activeMidiNote;
     activeMidiNote = null;
+    setMidiUiKeyActive(note, false);
     if (handlers && handlers.noteOff) {
       handlers.noteOff(note);
     }
@@ -771,12 +803,140 @@ function renderMidiKeyboard(container, ui, handlers) {
     noteOff();
   });
 
-  const hint = document.createElement('div');
-  hint.className = 'midi-hint';
-  hint.textContent = 'Click to play (C4–B4).';
+  let octaveShift = 0;
+  const baseNote = 60; // C4
+  const keyToSemitone = {
+    KeyA: 0,
+    KeyW: 1,
+    KeyS: 2,
+    KeyE: 3,
+    KeyD: 4,
+    KeyF: 5,
+    KeyT: 6,
+    KeyG: 7,
+    KeyY: 8,
+    KeyH: 9,
+    KeyU: 10,
+    KeyJ: 11
+  };
+
+  midiKeyboardKeyDownHandler = (event) => {
+    if (event.repeat) return;
+    if (isTypingTarget(event.target) || isTypingTarget(document.activeElement)) return;
+    const pressedKey = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+    if (pressedKey === 'z' || pressedKey === 'x') {
+      event.preventDefault();
+      if (pressedKey === 'z') {
+        if (octaveShift > -4) {
+          releaseComputerMidiNotes(handlers);
+          octaveShift -= 1;
+          updateMidiHint();
+        }
+      } else if (octaveShift < 4) {
+        releaseComputerMidiNotes(handlers);
+        octaveShift += 1;
+        updateMidiHint();
+      }
+      return;
+    }
+    const semitone = keyToSemitone[event.code];
+    if (!Number.isFinite(semitone)) return;
+    const note = Math.max(0, Math.min(127, baseNote + semitone + octaveShift * 12));
+    if (!Number.isFinite(note)) return;
+    event.preventDefault();
+    if (midiComputerActiveNotes.has(event.code)) return;
+    midiComputerActiveNotes.set(event.code, note);
+    setMidiUiKeyActive(note, true);
+    if (handlers && handlers.noteOn) {
+      Promise.resolve(handlers.noteOn(note, 0.8)).catch(() => {});
+    }
+  };
+
+  midiKeyboardKeyUpHandler = (event) => {
+    const note = midiComputerActiveNotes.get(event.code);
+    if (!Number.isFinite(note)) return;
+    event.preventDefault();
+    midiComputerActiveNotes.delete(event.code);
+    setMidiUiKeyActive(note, false);
+    if (handlers && handlers.noteOff) {
+      handlers.noteOff(note);
+    }
+  };
+
+  midiKeyboardBlurHandler = () => {
+    releaseComputerMidiNotes(handlers);
+  };
+
+  window.addEventListener('keydown', midiKeyboardKeyDownHandler);
+  window.addEventListener('keyup', midiKeyboardKeyUpHandler);
+  window.addEventListener('blur', midiKeyboardBlurHandler);
+
+  let hint = null;
+  if (showHint) {
+    hint = document.createElement('div');
+    hint.className = 'midi-hint';
+  }
+  const updateMidiHint = () => {
+    if (!hint) return;
+    const low = baseNote + octaveShift * 12;
+    const high = low + 11;
+    const octaveLabel = 4 + octaveShift;
+    hint.textContent = `Click to play or keyboard: A W S E D F T G Y H U J (${low}-${high}, C${octaveLabel}-B${octaveLabel}). Octave: Z/X.`;
+  };
+  updateMidiHint();
 
   container.appendChild(keyboard);
-  container.appendChild(hint);
+  if (hint) {
+    container.appendChild(hint);
+  }
+}
+
+function setMidiUiKeyActive(note, active) {
+  const key = midiUiKeyByNote.get(note);
+  if (!key) return;
+  key.classList.toggle('active', active);
+}
+
+function releaseComputerMidiNotes(handlers) {
+  const notes = new Set(midiComputerActiveNotes.values());
+  midiComputerActiveNotes.clear();
+  for (const note of notes) {
+    setMidiUiKeyActive(note, false);
+    if (handlers && handlers.noteOff) {
+      handlers.noteOff(note);
+    }
+  }
+}
+
+function detachComputerMidiKeyboard() {
+  if (midiKeyboardKeyDownHandler) {
+    window.removeEventListener('keydown', midiKeyboardKeyDownHandler);
+    midiKeyboardKeyDownHandler = null;
+  }
+  if (midiKeyboardKeyUpHandler) {
+    window.removeEventListener('keyup', midiKeyboardKeyUpHandler);
+    midiKeyboardKeyUpHandler = null;
+  }
+  if (midiKeyboardBlurHandler) {
+    window.removeEventListener('blur', midiKeyboardBlurHandler);
+    midiKeyboardBlurHandler = null;
+  }
+  const notes = new Set(midiComputerActiveNotes.values());
+  midiComputerActiveNotes.clear();
+  for (const note of notes) {
+    noteOffMidi(note);
+  }
+  for (const key of midiUiKeyByNote.values()) {
+    key.classList.remove('active');
+  }
+  midiUiKeyByNote.clear();
+}
+
+function isTypingTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
 async function renderFaustUi(container, ui) {
@@ -955,6 +1115,31 @@ function colorFromPath(path) {
   return `hsl(${hue} 68% 62%)`;
 }
 
+function shouldAutoDisableOrbitSlider(slider) {
+  if (!slider) return false;
+  if (polyVoices <= 0) return false;
+  const text = `${slider.path || ''} ${slider.label || ''}`.toLowerCase();
+  return /(^|[^a-z])(freq|frequency|hz|pitch|gain|amp|velocity|vel)([^a-z]|$)/.test(text);
+}
+
+function isOrbitSliderDisabled(path) {
+  return !!(orbitState && orbitState.disabledPaths && orbitState.disabledPaths.has(path));
+}
+
+function toggleOrbitSliderDisabled(path) {
+  if (!orbitState || !path) return false;
+  if (!orbitState.disabledPaths) {
+    orbitState.disabledPaths = new Set();
+  }
+  if (orbitState.disabledPaths.has(path)) {
+    orbitState.disabledPaths.delete(path);
+    requestOrbitSyncFromParams(true);
+    return false;
+  }
+  orbitState.disabledPaths.add(path);
+  return true;
+}
+
 function setupOrbitCanvasResize() {
   teardownOrbitCanvasResize();
   if (!orbitCanvas) return;
@@ -1024,7 +1209,8 @@ function initOrbitState(sliders, persisted) {
         ? Math.max(defaultInner + 10, Number(persisted.outerRadius))
         : defaultOuter,
     sliders,
-    positions: {}
+    positions: {},
+    disabledPaths: new Set()
   };
   ensureOrbitRadii();
 
@@ -1032,6 +1218,20 @@ function initOrbitState(sliders, persisted) {
     persisted && persisted.positions && typeof persisted.positions === 'object'
       ? persisted.positions
       : {};
+  const persistedDisabled =
+    persisted && Array.isArray(persisted.disabledPaths)
+      ? persisted.disabledPaths
+      : [];
+  for (const path of persistedDisabled) {
+    if (typeof path === 'string') {
+      orbitState.disabledPaths.add(path);
+    }
+  }
+  for (const slider of sliders) {
+    if (shouldAutoDisableOrbitSlider(slider)) {
+      orbitState.disabledPaths.add(slider.path);
+    }
+  }
 
   const count = Math.max(1, sliders.length);
   sliders.forEach((slider, index) => {
@@ -1066,6 +1266,13 @@ function installOrbitPointerHandlers() {
     const p = orbitPointerPosition(event);
     const hit = hitTestOrbit(p.x, p.y);
     if (!hit) return;
+    if (hit.mode === 'slider' && hit.path && event.shiftKey) {
+      event.preventDefault();
+      toggleOrbitSliderDisabled(hit.path);
+      scheduleOrbitDraw();
+      sendRunOrbitSnapshot(true);
+      return;
+    }
     event.preventDefault();
     orbitCanvas.setPointerCapture(event.pointerId);
     orbitPointer = {
@@ -1073,11 +1280,17 @@ function installOrbitPointerHandlers() {
       mode: hit.mode,
       path: hit.path || null
     };
+    updateOrbitCursor(orbitPointer.mode);
   };
   orbitCanvas.onpointermove = (event) => {
-    if (!orbitState || !orbitPointer) return;
-    if (event.pointerId !== orbitPointer.pointerId) return;
     const p = orbitPointerPosition(event);
+    if (!orbitState) return;
+    if (!orbitPointer) {
+      const hit = hitTestOrbit(p.x, p.y);
+      updateOrbitCursor(hit ? hit.mode : null);
+      return;
+    }
+    if (event.pointerId !== orbitPointer.pointerId) return;
     if (orbitPointer.mode === 'slider' && orbitPointer.path) {
       const nextPos = {
         x: clamp(p.x, 0, orbitState.width),
@@ -1085,6 +1298,15 @@ function installOrbitPointerHandlers() {
       };
       orbitState.positions[orbitPointer.path] = nextPos;
       applyOrbitValueForPath(orbitPointer.path);
+      scheduleOrbitDraw();
+      sendRunOrbitSnapshot();
+      return;
+    }
+    if (orbitPointer.mode === 'outer') {
+      const d = Math.hypot(p.x - orbitState.center.x, p.y - orbitState.center.y);
+      orbitState.outerRadius = d;
+      ensureOrbitRadii();
+      applyOrbitValuesForAll();
       scheduleOrbitDraw();
       sendRunOrbitSnapshot();
       return;
@@ -1102,11 +1324,20 @@ function installOrbitPointerHandlers() {
     if (orbitPointer.mode === 'slider' && orbitPointer.path) {
       const path = orbitPointer.path;
       const value = paramValues[path];
-      if (typeof value === 'number') {
+      if (typeof value === 'number' && !isOrbitSliderDisabled(path)) {
         applyParamToDsp(path, value, { smooth: true, commit: true });
       }
     } else if (orbitPointer.mode === 'center' && orbitState) {
       for (const slider of orbitState.sliders) {
+        if (isOrbitSliderDisabled(slider.path)) continue;
+        const value = paramValues[slider.path];
+        if (typeof value === 'number') {
+          applyParamToDsp(slider.path, value, { smooth: true, commit: true });
+        }
+      }
+    } else if (orbitPointer.mode === 'outer' && orbitState) {
+      for (const slider of orbitState.sliders) {
+        if (isOrbitSliderDisabled(slider.path)) continue;
         const value = paramValues[slider.path];
         if (typeof value === 'number') {
           applyParamToDsp(slider.path, value, { smooth: true, commit: true });
@@ -1114,10 +1345,17 @@ function installOrbitPointerHandlers() {
       }
     }
     orbitPointer = null;
+    updateOrbitCursor(null);
     sendRunOrbitSnapshot(true);
   };
   orbitCanvas.onpointercancel = () => {
     orbitPointer = null;
+    updateOrbitCursor(null);
+  };
+  orbitCanvas.onpointerleave = () => {
+    if (!orbitPointer) {
+      updateOrbitCursor(null);
+    }
   };
 }
 
@@ -1148,11 +1386,32 @@ function hitTestOrbit(x, y) {
   if (centerDistance <= orbitState.innerRadius + 6) {
     return { mode: 'center' };
   }
+  if (Math.abs(centerDistance - orbitState.outerRadius) <= 8) {
+    return { mode: 'outer' };
+  }
   return null;
+}
+
+function updateOrbitCursor(mode) {
+  if (!orbitCanvas) return;
+  if (mode === 'slider') {
+    orbitCanvas.style.cursor = 'pointer';
+    return;
+  }
+  if (mode === 'center') {
+    orbitCanvas.style.cursor = 'move';
+    return;
+  }
+  if (mode === 'outer') {
+    orbitCanvas.style.cursor = orbitPointer ? 'grabbing' : 'grab';
+    return;
+  }
+  orbitCanvas.style.cursor = 'default';
 }
 
 function applyOrbitValueForPath(path) {
   if (!orbitState) return;
+  if (isOrbitSliderDisabled(path)) return;
   const slider = orbitState.sliders.find((s) => s.path === path);
   const p = orbitState.positions[path];
   if (!slider || !p) return;
@@ -1170,6 +1429,7 @@ function applyOrbitValueForPath(path) {
 function applyOrbitValuesForAll() {
   if (!orbitState) return;
   for (const slider of orbitState.sliders) {
+    if (isOrbitSliderDisabled(slider.path)) continue;
     const p = orbitState.positions[slider.path];
     if (!p) continue;
     const value = sliderValueFromPosition(slider, p.x, p.y);
@@ -1220,6 +1480,9 @@ function syncOrbitFromParams() {
   const count = Math.max(1, sliders.length);
   let changed = false;
   sliders.forEach((slider, index) => {
+    if (isOrbitSliderDisabled(slider.path)) {
+      return;
+    }
     const raw = paramValues[slider.path];
     const current = Number.isFinite(raw) ? raw : slider.min;
     const u = clamp((current - slider.min) / (slider.max - slider.min), 0, 1);
@@ -1304,16 +1567,19 @@ function drawOrbitNow() {
   for (const slider of orbitState.sliders) {
     const p = orbitState.positions[slider.path];
     if (!p) continue;
-    ctx.fillStyle = slider.color;
+    const disabled = isOrbitSliderDisabled(slider.path);
+    const iconColor = disabled ? 'rgba(85,85,85,0.5)' : slider.color;
+    const labelColor = disabled ? 'rgba(105,105,105,0.68)' : 'rgba(255,255,255,0.85)';
+    ctx.fillStyle = iconColor;
     ctx.beginPath();
     ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.strokeStyle = disabled ? 'rgba(60,60,60,0.82)' : 'rgba(0,0,0,0.6)';
     ctx.lineWidth = 1;
     ctx.stroke();
 
     const label = shortOrbitLabel(slider.label);
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillStyle = labelColor;
     ctx.fillText(label, p.x + 10, p.y - 10);
   }
 }
@@ -1357,7 +1623,8 @@ function buildRunOrbitSnapshot(includeNonce = true) {
     center: { x: Math.round(orbitState.center.x), y: Math.round(orbitState.center.y) },
     innerRadius: Math.round(orbitState.innerRadius),
     outerRadius: Math.round(orbitState.outerRadius),
-    positions
+    positions,
+    disabledPaths: Array.from(orbitState.disabledPaths || []).sort()
   };
   if (includeNonce) {
     snapshot.nonce = Date.now();
@@ -1392,6 +1659,18 @@ function applyRemoteOrbitUi(remoteOrbit) {
     orbitState.outerRadius = Math.max(14, Number(remoteOrbit.outerRadius));
   }
   ensureOrbitRadii();
+  orbitState.disabledPaths = new Set();
+  const remoteDisabledPaths = Array.isArray(remoteOrbit.disabledPaths) ? remoteOrbit.disabledPaths : [];
+  for (const path of remoteDisabledPaths) {
+    if (typeof path === 'string') {
+      orbitState.disabledPaths.add(path);
+    }
+  }
+  for (const slider of orbitState.sliders) {
+    if (shouldAutoDisableOrbitSlider(slider)) {
+      orbitState.disabledPaths.add(slider.path);
+    }
+  }
   const positions = remoteOrbit.positions && typeof remoteOrbit.positions === 'object' ? remoteOrbit.positions : {};
   for (const slider of orbitState.sliders) {
     const p = positions[slider.path];
@@ -2299,6 +2578,7 @@ function applyRunState(runState, controls) {
 }
 
 export function dispose() {
+  detachComputerMidiKeyboard();
   releasePressedUiButtons();
   uninstallUiReleaseGuard();
   cleanupAudio();
