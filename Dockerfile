@@ -26,9 +26,6 @@ COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 RUN apt-get update \
   && apt-get install -y --no-install-recommends zip \
   && rm -rf /var/lib/apt/lists/*
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends zip \
-  && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
 ENV PORT=3000

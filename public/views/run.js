@@ -77,6 +77,9 @@ let lastRunOrbitSentAt = 0;
 let pendingOrbitUi = null;
 let orbitBaseWidth = 0;
 let orbitBaseHeight = 0;
+let orbitRenderScale = 1;
+let orbitRenderOffsetX = 0;
+let orbitRenderOffsetY = 0;
 let lastOrbitParamSyncAt = 0;
 let orbitParamSyncTimer = null;
 let remoteSyncInFlight = false;
@@ -1070,7 +1073,7 @@ function renderOrbitUi(container, ui) {
     orbitZoomSelect.value = orbitZoom;
     orbitZoomSelect.addEventListener('change', () => {
       orbitZoom = orbitZoomSelect.value;
-      resizeOrbitCanvas();
+      resizeOrbitCanvas({ keepViewportCenter: true });
       scheduleOrbitDraw();
       if (emitRunStateFn) emitRunStateFn();
     });
@@ -1156,7 +1159,8 @@ function setupOrbitCanvasResize() {
   teardownOrbitCanvasResize();
   if (!orbitCanvas) return;
   orbitResizeObserver = new ResizeObserver(() => {
-    resizeOrbitCanvas();
+    const resized = resizeOrbitCanvas();
+    if (!resized) return;
     if (orbitState) {
       orbitState.width = orbitBaseWidth || orbitState.width;
       orbitState.height = orbitBaseHeight || orbitState.height;
@@ -1178,22 +1182,49 @@ function teardownOrbitCanvasResize() {
   }
 }
 
-function resizeOrbitCanvas() {
-  if (!orbitCanvas || !orbitCtx || !orbitBody) return;
+function resizeOrbitCanvas(options = {}) {
+  if (!orbitCanvas || !orbitCtx || !orbitBody) return false;
+  const keepViewportCenter = !!options.keepViewportCenter;
+  const oldScale = orbitRenderScale || 1;
+  const oldOffsetX = orbitRenderOffsetX || 0;
+  const oldOffsetY = orbitRenderOffsetY || 0;
+  const centerWorldX = ((orbitBody.scrollLeft + (orbitBody.clientWidth / 2)) - oldOffsetX) / oldScale;
+  const centerWorldY = ((orbitBody.scrollTop + (orbitBody.clientHeight / 2)) - oldOffsetY) / oldScale;
   const dpr = window.devicePixelRatio || 1;
-  const baseWidth = Math.max(1, orbitBody.clientWidth || 1);
-  const baseHeight = Math.max(1, orbitBody.clientHeight || 1);
+  const rawWidth = orbitBody.clientWidth || 0;
+  const rawHeight = orbitBody.clientHeight || 0;
+  // Ignore transient hidden/collapsed layout states to avoid collapsing orbit
+  // dimensions and snapping center to top-left.
+  if (rawWidth < 2 || rawHeight < 2) return false;
+  const baseWidth = rawWidth;
+  const baseHeight = rawHeight;
   orbitBaseWidth = baseWidth;
   orbitBaseHeight = baseHeight;
   const parsed = parseInt(orbitZoom, 10);
   const scale = Number.isFinite(parsed) ? clamp(parsed / 100, 0.5, 3) : 1;
-  const cssWidth = Math.max(1, Math.round(baseWidth * scale));
-  const cssHeight = Math.max(1, Math.round(baseHeight * scale));
+  // Keep the canvas filling the pane when zooming out so the grid background
+  // still occupies the entire Orbit area.
+  const cssWidth = scale < 1 ? baseWidth : Math.max(1, Math.round(baseWidth * scale));
+  const cssHeight = scale < 1 ? baseHeight : Math.max(1, Math.round(baseHeight * scale));
+  const offsetX = scale < 1 ? (baseWidth - (baseWidth * scale)) / 2 : 0;
+  const offsetY = scale < 1 ? (baseHeight - (baseHeight * scale)) / 2 : 0;
   orbitCanvas.style.width = `${cssWidth}px`;
   orbitCanvas.style.height = `${cssHeight}px`;
-  orbitCanvas.width = Math.round(cssWidth * dpr);
-  orbitCanvas.height = Math.round(cssHeight * dpr);
-  orbitCtx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+  orbitCanvas.width = Math.round((scale < 1 ? baseWidth : cssWidth) * dpr);
+  orbitCanvas.height = Math.round((scale < 1 ? baseHeight : cssHeight) * dpr);
+  orbitRenderScale = scale;
+  orbitRenderOffsetX = offsetX;
+  orbitRenderOffsetY = offsetY;
+  orbitCtx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offsetX, dpr * offsetY);
+  if (keepViewportCenter) {
+    const targetCenterX = centerWorldX * scale + offsetX;
+    const targetCenterY = centerWorldY * scale + offsetY;
+    const maxScrollLeft = Math.max(0, cssWidth - orbitBody.clientWidth);
+    const maxScrollTop = Math.max(0, cssHeight - orbitBody.clientHeight);
+    orbitBody.scrollLeft = clamp(targetCenterX - (orbitBody.clientWidth / 2), 0, maxScrollLeft);
+    orbitBody.scrollTop = clamp(targetCenterY - (orbitBody.clientHeight / 2), 0, maxScrollTop);
+  }
+  return true;
 }
 
 function initOrbitState(sliders, persisted) {
@@ -1381,13 +1412,14 @@ function installOrbitPointerHandlers() {
 
 function orbitPointerPosition(event) {
   const rect = orbitCanvas.getBoundingClientRect();
-  const parsed = parseInt(orbitZoom, 10);
-  const scale = Number.isFinite(parsed) ? clamp(parsed / 100, 0.5, 3) : 1;
+  const scale = orbitRenderScale || 1;
+  const offsetX = orbitRenderOffsetX || 0;
+  const offsetY = orbitRenderOffsetY || 0;
   const rawX = event.clientX - rect.left;
   const rawY = event.clientY - rect.top;
   return {
-    x: rawX / scale,
-    y: rawY / scale
+    x: (rawX - offsetX) / scale,
+    y: (rawY - offsetY) / scale
   };
 }
 
@@ -1562,39 +1594,50 @@ function requestOrbitSyncFromParams(force = false) {
 function drawOrbitNow() {
   if (!orbitState || !orbitCtx || !orbitCanvas) return;
   const ctx = orbitCtx;
+  const scale = orbitRenderScale || 1;
+  const offsetX = orbitRenderOffsetX || 0;
+  const offsetY = orbitRenderOffsetY || 0;
   const width = orbitState.width;
   const height = orbitState.height;
-  ctx.clearRect(0, 0, width, height);
+  const canvasCssWidth = Math.max(1, orbitCanvas.clientWidth || width);
+  const canvasCssHeight = Math.max(1, orbitCanvas.clientHeight || height);
+  const minX = -offsetX / scale;
+  const minY = -offsetY / scale;
+  const drawWidth = canvasCssWidth / scale;
+  const drawHeight = canvasCssHeight / scale;
+  const maxX = minX + drawWidth;
+  const maxY = minY + drawHeight;
+  ctx.clearRect(minX, minY, drawWidth, drawHeight);
   ctx.fillStyle = '#111';
-  ctx.fillRect(0, 0, width, height);
+  ctx.fillRect(minX, minY, drawWidth, drawHeight);
 
   // Discrete centered grid to suggest draggable 2D space.
   const gridStep = Math.max(8, (orbitState.initialOuterRadius || orbitState.outerRadius) / 2);
   const gridOrigin = orbitState.gridOrigin || orbitState.center;
   ctx.strokeStyle = 'rgba(255,255,255,0.05)';
   ctx.lineWidth = 1;
-  for (let x = gridOrigin.x; x <= width; x += gridStep) {
+  for (let x = gridOrigin.x; x <= maxX; x += gridStep) {
     ctx.beginPath();
-    ctx.moveTo(Math.round(x) + 0.5, 0);
-    ctx.lineTo(Math.round(x) + 0.5, height);
+    ctx.moveTo(Math.round(x) + 0.5, minY);
+    ctx.lineTo(Math.round(x) + 0.5, maxY);
     ctx.stroke();
   }
-  for (let x = gridOrigin.x - gridStep; x >= 0; x -= gridStep) {
+  for (let x = gridOrigin.x - gridStep; x >= minX; x -= gridStep) {
     ctx.beginPath();
-    ctx.moveTo(Math.round(x) + 0.5, 0);
-    ctx.lineTo(Math.round(x) + 0.5, height);
+    ctx.moveTo(Math.round(x) + 0.5, minY);
+    ctx.lineTo(Math.round(x) + 0.5, maxY);
     ctx.stroke();
   }
-  for (let y = gridOrigin.y; y <= height; y += gridStep) {
+  for (let y = gridOrigin.y; y <= maxY; y += gridStep) {
     ctx.beginPath();
-    ctx.moveTo(0, Math.round(y) + 0.5);
-    ctx.lineTo(width, Math.round(y) + 0.5);
+    ctx.moveTo(minX, Math.round(y) + 0.5);
+    ctx.lineTo(maxX, Math.round(y) + 0.5);
     ctx.stroke();
   }
-  for (let y = gridOrigin.y - gridStep; y >= 0; y -= gridStep) {
+  for (let y = gridOrigin.y - gridStep; y >= minY; y -= gridStep) {
     ctx.beginPath();
-    ctx.moveTo(0, Math.round(y) + 0.5);
-    ctx.lineTo(width, Math.round(y) + 0.5);
+    ctx.moveTo(minX, Math.round(y) + 0.5);
+    ctx.lineTo(maxX, Math.round(y) + 0.5);
     ctx.stroke();
   }
 
