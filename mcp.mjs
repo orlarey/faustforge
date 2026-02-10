@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import * as z from 'zod/v4';
 import * as path from 'path';
+import * as fs from 'fs';
 import { loadFaustDocIndexFromFile } from './faust-doc-index.mjs';
 
 const HTTP_BASE = process.env.FAUST_HTTP_URL || 'http://localhost:3000';
@@ -13,6 +14,22 @@ const DEFAULT_DOC_INDEX_FILE_CANDIDATES = [
 ].filter(Boolean);
 let faustDocCache = null;
 let faustDocPrebuiltLoadAttempted = false;
+
+function readAppVersion() {
+  try {
+    const pkgPath = path.resolve(process.cwd(), 'package.json');
+    const raw = fs.readFileSync(pkgPath, 'utf8');
+    const pkg = JSON.parse(raw);
+    if (pkg && typeof pkg.version === 'string' && pkg.version.trim()) {
+      return pkg.version.trim();
+    }
+  } catch {
+    // ignore and fallback
+  }
+  return '1.0.0';
+}
+
+const APP_VERSION = readAppVersion();
 
 function toResult(data) {
   return {
@@ -400,7 +417,7 @@ async function requestText(path) {
 
 const server = new McpServer({
   name: 'faustforge',
-  version: '0.1.0'
+  version: APP_VERSION
 });
 
 server.registerTool(

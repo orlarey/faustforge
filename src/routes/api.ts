@@ -15,6 +15,7 @@ import {
 export function createApiRouter(sessionManager: SessionManager, stateStore: StateStore): Router {
   const router = Router();
   const sessionsBaseDir = process.env.SESSIONS_DIR || '/app/sessions';
+  const appVersion = readAppVersion();
 
   function clearSessionArtifacts(sessionPath: string): void {
     const targets = ['generated.cpp', 'signals.dot', 'tasks.dot', 'svg', 'wasm', 'webapp'];
@@ -192,6 +193,15 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     } catch {
       res.json({ version: 'Faust version unknown' });
     }
+  });
+
+  /**
+   * GET /app-version
+   * Récupère la version de faustforge (package.json)
+   * Response: { version: string }
+   */
+  router.get('/app-version', (_req: Request, res: Response) => {
+    res.json({ version: appVersion });
   });
 
   /**
@@ -893,4 +903,18 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
 
 function osTmpFallback(): string {
   return '/tmp';
+}
+
+function readAppVersion(): string {
+  try {
+    const pkgPath = path.resolve(process.cwd(), 'package.json');
+    const raw = fs.readFileSync(pkgPath, 'utf8');
+    const pkg = JSON.parse(raw);
+    if (pkg && typeof pkg.version === 'string' && pkg.version.trim()) {
+      return pkg.version.trim();
+    }
+  } catch {
+    // ignore and fallback
+  }
+  return '1.0.0';
 }

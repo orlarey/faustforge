@@ -37,6 +37,19 @@ header h1 {
   white-space: nowrap;
 }
 
+.header-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  white-space: nowrap;
+}
+
+#header-app-version {
+  font-size: 0.7rem;
+  color: #444;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+}
+
 .header-nav {
   display: flex;
   align-items: center;
@@ -399,21 +412,22 @@ footer {
 
 .audio-gate-card {
   width: min(520px, 100%);
-  background: #1b1b1b;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(26, 68, 43, 0.72);
+  border: 1px solid rgba(110, 215, 155, 0.35);
   border-radius: 8px;
   padding: 1.1rem 1rem;
   text-align: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
 }
 
 .audio-gate-card h2 {
-  color: #f0f0f0;
+  color: #dffbe9;
   font-size: 1.05rem;
   margin-bottom: 0.45rem;
 }
 
 .audio-gate-card p {
-  color: #b8b8b8;
+  color: #bce7cd;
   font-size: 0.88rem;
   margin-bottom: 0.8rem;
 }
@@ -1002,6 +1016,10 @@ footer {
     font-size: 0.9rem;
   }
 
+  #header-app-version {
+    font-size: 0.65rem;
+  }
+
   .header-nav {
     order: 3;
     flex: 1 1 100%;
@@ -1135,6 +1153,7 @@ footer {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  background: #111;
 }
 
 .orbit-canvas {

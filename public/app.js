@@ -41,6 +41,7 @@ const viewSelect = document.getElementById('view-select');
 const dropOverlay = document.getElementById('drop-overlay');
 const loadingOverlay = document.getElementById('loading-overlay');
 const footerVersion = document.getElementById('footer-version');
+const headerAppVersion = document.getElementById('header-app-version');
 const deleteSessionBtn = document.getElementById('delete-session');
 const refreshSessionBtn = document.getElementById('refresh-session');
 const audioGate = document.getElementById('audio-gate');
@@ -941,6 +942,19 @@ async function init() {
       const result = await response.json();
       if (response.ok && result.version) {
         footerVersion.textContent = result.version;
+      }
+    } catch {
+      // Ignorer si indisponible
+    }
+  }
+
+  // Charger la version de faustforge pour le bandeau
+  if (headerAppVersion) {
+    try {
+      const response = await fetch('/api/app-version');
+      const result = await response.json();
+      if (response.ok && result.version) {
+        headerAppVersion.textContent = `v${result.version}`;
       }
     } catch {
       // Ignorer si indisponible

@@ -1210,9 +1210,13 @@ function initOrbitState(sliders, persisted) {
         : defaultOuter,
     sliders,
     positions: {},
-    disabledPaths: new Set()
+    disabledPaths: new Set(),
+    initialOuterRadius: 0,
+    gridOrigin: { x: 0, y: 0 }
   };
   ensureOrbitRadii();
+  orbitState.initialOuterRadius = orbitState.outerRadius;
+  orbitState.gridOrigin = { x: orbitState.center.x, y: orbitState.center.y };
 
   const persistedPositions =
     persisted && persisted.positions && typeof persisted.positions === 'object'
@@ -1244,9 +1248,13 @@ function initOrbitState(sliders, persisted) {
       return;
     }
     const angle = (index / count) * Math.PI * 2 - Math.PI / 2;
+    const raw = paramValues[slider.path];
+    const current = Number.isFinite(raw) ? raw : slider.min;
+    const u = clamp((current - slider.min) / (slider.max - slider.min), 0, 1);
+    const distance = distanceFromNormalized(u);
     orbitState.positions[slider.path] = {
-      x: orbitState.center.x + Math.cos(angle) * orbitState.outerRadius,
-      y: orbitState.center.y + Math.sin(angle) * orbitState.outerRadius
+      x: orbitState.center.x + Math.cos(angle) * distance,
+      y: orbitState.center.y + Math.sin(angle) * distance
     };
   });
   constrainOrbitPositions();
@@ -1547,6 +1555,36 @@ function drawOrbitNow() {
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, width, height);
+
+  // Discrete centered grid to suggest draggable 2D space.
+  const gridStep = Math.max(8, (orbitState.initialOuterRadius || orbitState.outerRadius) / 2);
+  const gridOrigin = orbitState.gridOrigin || orbitState.center;
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 1;
+  for (let x = gridOrigin.x; x <= width; x += gridStep) {
+    ctx.beginPath();
+    ctx.moveTo(Math.round(x) + 0.5, 0);
+    ctx.lineTo(Math.round(x) + 0.5, height);
+    ctx.stroke();
+  }
+  for (let x = gridOrigin.x - gridStep; x >= 0; x -= gridStep) {
+    ctx.beginPath();
+    ctx.moveTo(Math.round(x) + 0.5, 0);
+    ctx.lineTo(Math.round(x) + 0.5, height);
+    ctx.stroke();
+  }
+  for (let y = gridOrigin.y; y <= height; y += gridStep) {
+    ctx.beginPath();
+    ctx.moveTo(0, Math.round(y) + 0.5);
+    ctx.lineTo(width, Math.round(y) + 0.5);
+    ctx.stroke();
+  }
+  for (let y = gridOrigin.y - gridStep; y >= 0; y -= gridStep) {
+    ctx.beginPath();
+    ctx.moveTo(0, Math.round(y) + 0.5);
+    ctx.lineTo(width, Math.round(y) + 0.5);
+    ctx.stroke();
+  }
 
   // Outer circle = min zone frontier.
   ctx.strokeStyle = 'rgba(255,255,255,0.2)';
