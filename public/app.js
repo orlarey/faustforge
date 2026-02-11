@@ -2,6 +2,7 @@
  * faustforge Frontend Application
  * Navigation de sessions inspirée de faustservice
  */
+import { TOOLTIP_TEXTS } from './tooltip-texts.js';
 
 // État de l'application
 const state = {
@@ -52,6 +53,100 @@ let lastStateTs = 0;
 let pasteSink = null;
 let localViewStickyUntil = 0;
 let lastLocalViewResyncAt = 0;
+let tooltipApplyRaf = null;
+
+function extractLabelText(el) {
+  const label = el.closest('label');
+  if (!label) return '';
+  const clone = label.cloneNode(true);
+  clone.querySelectorAll('input, select, textarea, button').forEach((n) => n.remove());
+  return (clone.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function inferTooltip(el) {
+  if (!el || !(el instanceof HTMLElement)) return '';
+  const ariaLabel = (el.getAttribute('aria-label') || '').trim();
+  if (ariaLabel) {
+    const key = ariaLabel.toLowerCase();
+    if (TOOLTIP_TEXTS.byLabel[key]) return TOOLTIP_TEXTS.byLabel[key];
+    return ariaLabel;
+  }
+
+  if (el.id === 'session-label' && !el.classList.contains('clickable')) {
+    return 'Current session';
+  }
+
+  const byId = el.id && TOOLTIP_TEXTS.byId[el.id] ? TOOLTIP_TEXTS.byId[el.id] : '';
+  if (byId) return byId;
+
+  const labelText = extractLabelText(el);
+  if (labelText) {
+    const key = labelText.toLowerCase();
+    if (TOOLTIP_TEXTS.byLabel[key]) return TOOLTIP_TEXTS.byLabel[key];
+    if (el.tagName === 'SELECT') return `Select ${labelText.toLowerCase()}`;
+    if (el.tagName === 'INPUT') return `Set ${labelText.toLowerCase()}`;
+    return labelText;
+  }
+
+  if (el.matches('.midi-key')) {
+    const note = (el.textContent || '').trim();
+    return note ? `${TOOLTIP_TEXTS.generic.playMidiNote} ${note}` : TOOLTIP_TEXTS.generic.playMidiNote;
+  }
+
+  if (el.tagName === 'BUTTON') {
+    const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    const key = text.toLowerCase();
+    if (TOOLTIP_TEXTS.byButtonText[key]) return TOOLTIP_TEXTS.byButtonText[key];
+    return text ? `Activate ${text.toLowerCase()}` : TOOLTIP_TEXTS.generic.activateControl;
+  }
+
+  if (el.tagName === 'SELECT') {
+    return TOOLTIP_TEXTS.generic.selectOption;
+  }
+
+  if (el.tagName === 'INPUT') {
+    const type = (el.getAttribute('type') || 'text').toLowerCase();
+    if (type === 'number' || type === 'range') return TOOLTIP_TEXTS.generic.setValue;
+    if (type === 'checkbox') return TOOLTIP_TEXTS.generic.toggleOption;
+    if (type === 'file') return TOOLTIP_TEXTS.byId['file-input'] || TOOLTIP_TEXTS.generic.enterValue;
+    return TOOLTIP_TEXTS.generic.enterValue;
+  }
+
+  if (el.tagName === 'TEXTAREA') {
+    return TOOLTIP_TEXTS.generic.enterText;
+  }
+
+  if (el.getAttribute('role') === 'button') {
+    return TOOLTIP_TEXTS.generic.activateControl;
+  }
+
+  return '';
+}
+
+function applyTooltips(root = document) {
+  const selectors = [
+    'button',
+    'select',
+    'input',
+    'textarea',
+    '[role="button"]',
+    '.midi-key',
+    '#session-label.clickable'
+  ].join(', ');
+  root.querySelectorAll(selectors).forEach((el) => {
+    if (!(el instanceof HTMLElement)) return;
+    const hint = inferTooltip(el);
+    if (hint) el.setAttribute('title', hint);
+  });
+}
+
+function scheduleTooltipApply(root = document) {
+  if (tooltipApplyRaf) return;
+  tooltipApplyRaf = requestAnimationFrame(() => {
+    tooltipApplyRaf = null;
+    applyTooltips(root);
+  });
+}
 
 /**
  * Charge dynamiquement les modules de vue
@@ -218,8 +313,10 @@ async function renderCurrentView() {
         }
       }
     });
+    scheduleTooltipApply(viewContainer);
   } catch (err) {
     viewContainer.innerHTML = `<div class="error">Error: ${err.message}</div>`;
+    scheduleTooltipApply(viewContainer);
   }
 }
 
@@ -590,6 +687,7 @@ function hideInterface() {
       await copyToClipboard(claudeConfig);
     });
   }
+  scheduleTooltipApply(viewContainer);
 }
 
 function getClaudeMcpConfigText() {
@@ -660,10 +758,10 @@ if (downloadBtn) {
       filename = `${base}.dsp.dot`;
     } else if (state.currentView === 'svg') {
       url = `/api/${session.sha1}/download/svg`;
-      filename = `${base}-svg.zip`;
+      filename = `${base}-svg.tar.gz`;
     } else if (state.currentView === 'run') {
       url = `/api/${session.sha1}/download/pwa`;
-      filename = `${base}-pwa.zip`;
+      filename = `${base}-pwa.tar.gz`;
     }
 
     try {
@@ -677,7 +775,7 @@ if (downloadBtn) {
 if (archiveBtn) {
   archiveBtn.addEventListener('click', async () => {
     try {
-      await downloadFromUrl('/api/download/archive/dsp', 'faustforge-dsp-archive.zip', 'Archive failed');
+      await downloadFromUrl('/api/download/archive/dsp', 'faustforge-dsp-archive.tar.gz', 'Archive failed');
       hideError();
     } catch (err) {
       showError(`Error: ${err.message}`);
@@ -1001,6 +1099,12 @@ async function init() {
 
   // Poll shared state (MCP may update it)
   setInterval(pollState, 1500);
+
+  applyTooltips(document);
+  const tooltipObserver = new MutationObserver(() => {
+    scheduleTooltipApply(document);
+  });
+  tooltipObserver.observe(document.body, { childList: true, subtree: true });
 }
 
 init();

@@ -2,6 +2,7 @@
  * Vue Run
  * Exécute le DSP en WebAudio via FaustWASM
  */
+import { FaustOrbitUI } from './faust-orbit-ui.js';
 
 let audioContext = null;
 let dspNode = null;
@@ -82,6 +83,9 @@ let orbitRenderOffsetX = 0;
 let orbitRenderOffsetY = 0;
 let lastOrbitParamSyncAt = 0;
 let orbitParamSyncTimer = null;
+let orbitUiInstance = null;
+let orbitUiBatchDepth = 0;
+let orbitUiBatchSnapshotPending = false;
 let remoteSyncInFlight = false;
 const PARAM_SMOOTH_INTERVAL_MS = 16;
 const PARAM_SMOOTH_EPSILON = 1e-4;
@@ -104,62 +108,70 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   container.innerHTML = `
     <div class="run-view">
       <div class="run-header">
-        <button class="primary-btn" id="run-toggle">Start Audio</button>
-        <span class="run-status">Idle</span>
-        <label class="run-mode">Mode
-          <select id="run-mode">
-            <option value="mono">Mono</option>
-            <option value="1">1</option>
-            <option value="2">2</option>
-            <option value="4">4</option>
-            <option value="8">8</option>
-            <option value="16">16</option>
-            <option value="32">32</option>
-            <option value="64">64</option>
-          </select>
-        </label>
-        <label class="run-midi-source">MIDI
-          <select id="midi-input"></select>
-        </label>
+        <span class="run-note run-header-title">RUN</span>
         <div class="run-midi-inline hidden" id="run-midi-inline"></div>
-        <div class="spacer"></div>
-        <span class="run-note">FaustWASM</span>
+        <div class="run-header-controls">
+          <div class="run-header-pill">
+            <span>Audio</span>
+            <select id="run-audio-state" aria-label="Audio state">
+              <option value="off">Off</option>
+              <option value="on">On</option>
+            </select>
+          </div>
+          <label class="run-header-pill">
+            <span>Mode</span>
+            <select id="run-mode">
+              <option value="mono">Mono</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="4">4</option>
+              <option value="8">8</option>
+              <option value="16">16</option>
+              <option value="32">32</option>
+              <option value="64">64</option>
+            </select>
+          </label>
+          <label class="run-header-pill">
+            <span>MIDI</span>
+            <select id="midi-input"></select>
+          </label>
+        </div>
       </div>
       <div class="run-controls" id="run-controls">
         <div class="info">Compiling...</div>
       </div>
       <div class="run-scope">
         <div class="run-scope-header">
-          <span>Oscilloscope</span>
+          <span class="run-scope-title">Oscilloscope</span>
           <div class="run-scope-controls">
-            <label>View
+            <label class="run-scope-pill">View
               <select id="scope-view">
                 <option value="time">Waveform</option>
                 <option value="freq">Spectrum</option>
               </select>
             </label>
-            <label>Scale
+            <label class="run-scope-pill">Scale
               <select id="scope-scale">
                 <option value="log">Log</option>
                 <option value="linear">Linear</option>
               </select>
             </label>
-            <label>Trigger
+            <label class="run-scope-pill">Trigger
               <select id="scope-mode">
                 <option value="auto">Auto</option>
                 <option value="normal">Normal</option>
               </select>
             </label>
-            <label>Slope
+            <label class="run-scope-pill">Slope
               <select id="scope-slope">
                 <option value="rising">Rising</option>
                 <option value="falling">Falling</option>
               </select>
             </label>
-            <label>Threshold
+            <label class="run-scope-pill">Threshold
               <input id="scope-threshold" class="scope-input" type="number" step="0.01" value="0.0">
             </label>
-            <label>Holdoff (ms)
+            <label class="run-scope-pill">Holdoff (ms)
               <input id="scope-holdoff" class="scope-input" type="number" step="1" value="20">
             </label>
           </div>
@@ -169,8 +181,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     </div>
   `;
 
-  const toggleBtn = container.querySelector('#run-toggle');
-  const statusEl = container.querySelector('.run-status');
+  const audioStateSelect = container.querySelector('#run-audio-state');
   const modeSelect = container.querySelector('#run-mode');
   const midiInputSelect = container.querySelector('#midi-input');
   const midiInlineEl = container.querySelector('#run-midi-inline');
@@ -184,16 +195,16 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   const scopeHoldoff = container.querySelector('#scope-holdoff');
   const noteEl = container.querySelector('.run-note');
   let audioLocked = false;
+  const setAudioToggleState = (isOn) => {
+    if (!audioStateSelect) return;
+    audioStateSelect.value = isOn ? 'on' : 'off';
+  };
 
   function updateRunNote() {
     if (!noteEl) return;
-    if (audioLocked) {
-      noteEl.textContent = 'Audio Locked';
-      noteEl.classList.add('run-note-locked');
-      return;
-    }
-    noteEl.textContent = 'FaustWASM';
-    noteEl.classList.remove('run-note-locked');
+    noteEl.textContent = 'RUN';
+    noteEl.classList.toggle('run-note-locked', audioLocked);
+    noteEl.title = audioLocked ? 'Audio is locked in this browser tab' : 'Run view';
   }
 
   function setAudioLocked(locked) {
@@ -330,8 +341,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     isSwitchingPolyphony = true;
     polyVoices = safeVoices;
     modeSelect.value = polyVoices > 0 ? String(polyVoices) : 'mono';
-    statusEl.textContent = 'Switching mode...';
-    toggleBtn.disabled = true;
+    audioStateSelect.disabled = true;
+    setAudioToggleState(audioRunning);
     emitRunState();
     const wasRunning = audioRunning;
     try {
@@ -344,11 +355,10 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       if (wasRunning) {
         await startAudio();
       } else {
-        statusEl.textContent = 'Ready';
-        toggleBtn.textContent = 'Start Audio';
+        setAudioToggleState(false);
       }
     } finally {
-      toggleBtn.disabled = false;
+      audioStateSelect.disabled = false;
       isSwitchingPolyphony = false;
     }
   }
@@ -369,25 +379,25 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   controlsContent = prepared.content;
   controlsContent.innerHTML = '<div class="info">Compiling...</div>';
 
-  toggleBtn.disabled = true;
-  statusEl.textContent = 'Compiling...';
+  audioStateSelect.disabled = true;
+  setAudioToggleState(audioRunning);
 
   try {
     await compileAndRenderUI(controlsEl, sha, polyVoices);
     await updateMidi();
-    statusEl.textContent = 'Ready';
+    setAudioToggleState(audioRunning);
   } catch (err) {
-    statusEl.textContent = 'Error';
+    setAudioToggleState(false);
     const message = err && err.message ? err.message : String(err);
     controlsContent.innerHTML = `<div class="error">Error: ${message}</div>`;
   } finally {
-    toggleBtn.disabled = false;
+    audioStateSelect.disabled = false;
   }
 
   const startAudio = async () => {
     if (audioRunning) return;
-    statusEl.textContent = 'Starting...';
-    toggleBtn.disabled = true;
+    audioStateSelect.disabled = true;
+    setAudioToggleState(false);
 
     try {
       const desiredMode = polyVoices > 0 ? `poly:${polyVoices}` : 'mono';
@@ -413,8 +423,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       startAudioOutput();
       startParamPolling();
 
-      statusEl.textContent = 'Running';
-      toggleBtn.textContent = 'Stop Audio';
+      setAudioToggleState(true);
       emitRunState();
     } catch (err) {
       console.error('Run view error:', err);
@@ -426,14 +435,14 @@ export async function render(container, { sha, runState, onRunStateChange }) {
         setAudioLocked(true);
       }
       cleanupAudio();
-      statusEl.textContent = 'Error';
+      setAudioToggleState(false);
       const stack = err && err.stack ? err.stack : '';
       controlsContent.innerHTML = `
         <div class="error">Error: ${message}</div>
         <pre class="run-stack">${stack}</pre>
       `;
     } finally {
-      toggleBtn.disabled = false;
+      audioStateSelect.disabled = false;
     }
   };
 
@@ -442,21 +451,21 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     stopAudioOutput();
     noteOffMidi();
     stopParamPolling();
-    statusEl.textContent = 'Stopped';
-    toggleBtn.textContent = 'Start Audio';
+    setAudioToggleState(false);
     emitRunState();
   };
 
-  toggleBtn.addEventListener('click', async () => {
-    if (audioRunning) {
-      stopAudio();
-    } else {
+  audioStateSelect.addEventListener('change', async () => {
+    if (audioStateSelect.disabled) return;
+    if (audioStateSelect.value === 'on') {
       await startAudio();
+    } else {
+      stopAudio();
     }
   });
 
   const handleRunAreaClick = async (event) => {
-    if (toggleBtn.disabled) return;
+    if (audioStateSelect.disabled) return;
     const target = event.target;
     const inUiRoot = !!(currentUiRoot && target instanceof Element && currentUiRoot.contains(target));
     const inOrbit = !!(controlsOrbitPane && target instanceof Element && controlsOrbitPane.contains(target));
@@ -957,17 +966,20 @@ async function renderFaustUi(container, ui) {
   container.innerHTML = `
     <div class="regular-wrap">
       <div class="regular-header">
-        <span>Regular UI</span>
-        <label class="panel-zoom">Zoom
-          <select class="regular-zoom">
-            <option value="auto">Auto</option>
-            <option value="50">50%</option>
-            <option value="75">75%</option>
-            <option value="100">100%</option>
-            <option value="125">125%</option>
-            <option value="150">150%</option>
-          </select>
-        </label>
+        <span class="regular-title">Regular UI</span>
+        <div class="regular-zoom-wrap">
+          <div class="regular-zoom-group" aria-label="Regular UI zoom selector">
+            <span class="regular-zoom-label">Zoom</span>
+            <select class="regular-zoom">
+              <option value="auto">Auto</option>
+              <option value="50">50%</option>
+              <option value="75">75%</option>
+              <option value="100">100%</option>
+              <option value="125">125%</option>
+              <option value="150">150%</option>
+            </select>
+          </div>
+        </div>
       </div>
       <div class="regular-content"><div class="info">Loading UI...</div></div>
     </div>
@@ -1046,48 +1058,63 @@ async function renderFaustUi(container, ui) {
 
 function renderOrbitUi(container, ui) {
   if (!container) return;
-  container.innerHTML = `
-    <div class="orbit-wrap">
-      <div class="orbit-header">
-        <span>Orbit UI</span>
-        <label class="panel-zoom">Zoom
-          <select class="orbit-zoom">
-            <option value="75">75%</option>
-            <option value="100">100%</option>
-            <option value="125">125%</option>
-            <option value="150">150%</option>
-            <option value="200">200%</option>
-          </select>
-        </label>
-      </div>
-      <div class="orbit-body">
-        <canvas class="orbit-canvas"></canvas>
-      </div>
-    </div>
-  `;
-  const orbitZoomSelect = container.querySelector('.orbit-zoom');
-  if (orbitZoomSelect) {
-    if (![...orbitZoomSelect.options].some((o) => o.value === orbitZoom)) {
-      orbitZoom = '100';
-    }
-    orbitZoomSelect.value = orbitZoom;
-    orbitZoomSelect.addEventListener('change', () => {
-      orbitZoom = orbitZoomSelect.value;
-      resizeOrbitCanvas({ keepViewportCenter: true });
-      scheduleOrbitDraw();
-      if (emitRunStateFn) emitRunStateFn();
-    });
+  if (orbitUiInstance) {
+    orbitUiInstance.destroy();
+    orbitUiInstance = null;
   }
-  orbitBody = container.querySelector('.orbit-body');
-  orbitCanvas = container.querySelector('.orbit-canvas');
-  if (!orbitCanvas) return;
-  orbitCtx = orbitCanvas.getContext('2d');
-  setupOrbitCanvasResize();
-  const sliders = collectOrbitSliders(ui);
-  initOrbitState(sliders, pendingOrbitUi);
-  installOrbitPointerHandlers();
+
+  orbitUiInstance = new FaustOrbitUI(
+    container,
+    (path, value) => {
+      const isButton = uiButtonPaths.has(path);
+      setParamValue(path, value, {
+        smooth: !isButton,
+        skipSnapshot: true,
+        skipEmit: true,
+        skipOrbitSync: true
+      });
+      if (orbitUiBatchDepth > 0) {
+        orbitUiBatchSnapshotPending = true;
+      } else {
+        sendRunParamsSnapshot();
+      }
+      if (emitRunStateFn) emitRunStateFn();
+    },
+    {
+      onInteractionStart: () => {
+        orbitUiBatchDepth += 1;
+      },
+      onInteractionEnd: () => {
+        orbitUiBatchDepth = Math.max(0, orbitUiBatchDepth - 1);
+        if (orbitUiBatchDepth === 0 && orbitUiBatchSnapshotPending) {
+          orbitUiBatchSnapshotPending = false;
+          sendRunParamsSnapshot(true);
+        }
+      },
+      onOrbitStateChange: (state) => {
+        orbitZoom = String(Math.round(state.zoom));
+        sendRunOrbitSnapshot();
+        if (emitRunStateFn) emitRunStateFn();
+      }
+    }
+  );
+
+  orbitUiInstance.beginUpdate();
+  try {
+    let nextState = orbitUiInstance.buildControls(ui);
+    if (pendingOrbitUi && typeof pendingOrbitUi === 'object') {
+      nextState = mergeRemoteOrbitState(nextState, pendingOrbitUi);
+    }
+    const parsedZoom = parseInt(orbitZoom, 10);
+    nextState.zoom = Number.isFinite(parsedZoom) ? parsedZoom : 100;
+    orbitUiInstance.setOrbitState(nextState);
+    orbitZoom = String(Math.round(orbitUiInstance.getZoom()));
+    pendingOrbitUi = null;
+  } finally {
+    orbitUiInstance.endUpdate();
+  }
+
   requestOrbitSyncFromParams(true);
-  drawOrbitNow();
   sendRunOrbitSnapshot(true);
 }
 
@@ -1566,28 +1593,29 @@ function syncOrbitFromParams() {
 }
 
 function requestOrbitSyncFromParams(force = false) {
-  if (!orbitState) return;
+  if (!orbitUiInstance) return;
   if (force) {
     if (orbitParamSyncTimer) {
       clearTimeout(orbitParamSyncTimer);
       orbitParamSyncTimer = null;
     }
     lastOrbitParamSyncAt = Date.now();
-    syncOrbitFromParams();
+    orbitUiInstance.setParams(paramValues);
     return;
   }
   const now = Date.now();
   const elapsed = now - lastOrbitParamSyncAt;
   if (elapsed >= ORBIT_PARAM_SYNC_INTERVAL_MS) {
     lastOrbitParamSyncAt = now;
-    syncOrbitFromParams();
+    orbitUiInstance.setParams(paramValues);
     return;
   }
   if (orbitParamSyncTimer) return;
   orbitParamSyncTimer = setTimeout(() => {
     orbitParamSyncTimer = null;
     lastOrbitParamSyncAt = Date.now();
-    syncOrbitFromParams();
+    if (!orbitUiInstance) return;
+    orbitUiInstance.setParams(paramValues);
   }, Math.max(0, ORBIT_PARAM_SYNC_INTERVAL_MS - elapsed));
 }
 
@@ -1705,19 +1733,17 @@ function constrainOrbitPositions() {
 }
 
 function buildRunOrbitSnapshot(includeNonce = true) {
-  if (!orbitState) return null;
-  const positions = {};
-  for (const slider of orbitState.sliders) {
-    const p = orbitState.positions[slider.path];
-    if (!p) continue;
-    positions[slider.path] = { x: Math.round(p.x), y: Math.round(p.y) };
-  }
+  if (!orbitUiInstance) return null;
+  const orbitStateNow = orbitUiInstance.getOrbitState();
   const snapshot = {
-    center: { x: Math.round(orbitState.center.x), y: Math.round(orbitState.center.y) },
-    innerRadius: Math.round(orbitState.innerRadius),
-    outerRadius: Math.round(orbitState.outerRadius),
-    positions,
-    disabledPaths: Array.from(orbitState.disabledPaths || []).sort()
+    zoom: Math.round(orbitStateNow.zoom),
+    center: {
+      x: Math.round(orbitStateNow.center.x),
+      y: Math.round(orbitStateNow.center.y)
+    },
+    innerRadius: Math.round(orbitStateNow.innerRadius),
+    outerRadius: Math.round(orbitStateNow.outerRadius),
+    controls: orbitStateNow.controls
   };
   if (includeNonce) {
     snapshot.nonce = Date.now();
@@ -1740,41 +1766,61 @@ function sendRunOrbitSnapshot(force = false) {
 }
 
 function applyRemoteOrbitUi(remoteOrbit) {
-  if (!orbitState || !remoteOrbit || typeof remoteOrbit !== 'object') return;
-  if (remoteOrbit.center) {
-    orbitState.center.x = clamp(Number(remoteOrbit.center.x) || orbitState.center.x, 0, orbitState.width);
-    orbitState.center.y = clamp(Number(remoteOrbit.center.y) || orbitState.center.y, 0, orbitState.height);
+  if (!remoteOrbit || typeof remoteOrbit !== 'object') return;
+  if (!orbitUiInstance) {
+    pendingOrbitUi = remoteOrbit;
+    return;
   }
-  if (Number.isFinite(remoteOrbit.innerRadius)) {
-    orbitState.innerRadius = Math.max(8, Number(remoteOrbit.innerRadius));
-  }
-  if (Number.isFinite(remoteOrbit.outerRadius)) {
-    orbitState.outerRadius = Math.max(14, Number(remoteOrbit.outerRadius));
-  }
-  ensureOrbitRadii();
-  orbitState.disabledPaths = new Set();
-  const remoteDisabledPaths = Array.isArray(remoteOrbit.disabledPaths) ? remoteOrbit.disabledPaths : [];
-  for (const path of remoteDisabledPaths) {
-    if (typeof path === 'string') {
-      orbitState.disabledPaths.add(path);
+  const base = orbitUiInstance.getOrbitState();
+  const merged = mergeRemoteOrbitState(base, remoteOrbit);
+  orbitUiInstance.setOrbitState(merged);
+}
+
+function mergeRemoteOrbitState(baseState, remoteOrbit) {
+  const next = {
+    zoom: Number.isFinite(remoteOrbit.zoom) ? Number(remoteOrbit.zoom) : baseState.zoom,
+    center: {
+      x: Number.isFinite(remoteOrbit.center && remoteOrbit.center.x)
+        ? Number(remoteOrbit.center.x)
+        : baseState.center.x,
+      y: Number.isFinite(remoteOrbit.center && remoteOrbit.center.y)
+        ? Number(remoteOrbit.center.y)
+        : baseState.center.y
+    },
+    innerRadius: Number.isFinite(remoteOrbit.innerRadius) ? Number(remoteOrbit.innerRadius) : baseState.innerRadius,
+    outerRadius: Number.isFinite(remoteOrbit.outerRadius) ? Number(remoteOrbit.outerRadius) : baseState.outerRadius,
+    controls: { ...baseState.controls }
+  };
+
+  if (remoteOrbit.controls && typeof remoteOrbit.controls === 'object') {
+    for (const [path, local] of Object.entries(baseState.controls)) {
+      const incoming = remoteOrbit.controls[path];
+      if (!incoming || typeof incoming !== 'object') continue;
+      next.controls[path] = {
+        ...local,
+        x: Number.isFinite(incoming.x) ? Number(incoming.x) : local.x,
+        y: Number.isFinite(incoming.y) ? Number(incoming.y) : local.y,
+        enabled: typeof incoming.enabled === 'boolean' ? incoming.enabled : local.enabled,
+        label: typeof incoming.label === 'string' ? incoming.label : local.label,
+        color: typeof incoming.color === 'string' ? incoming.color : local.color,
+        step: Number.isFinite(incoming.step) ? Number(incoming.step) : local.step
+      };
     }
+    return next;
   }
-  for (const slider of orbitState.sliders) {
-    if (shouldAutoDisableOrbitSlider(slider)) {
-      orbitState.disabledPaths.add(slider.path);
-    }
-  }
+
   const positions = remoteOrbit.positions && typeof remoteOrbit.positions === 'object' ? remoteOrbit.positions : {};
-  for (const slider of orbitState.sliders) {
-    const p = positions[slider.path];
-    if (!p) continue;
-    orbitState.positions[slider.path] = {
-      x: clamp(Number(p.x) || orbitState.positions[slider.path]?.x || 0, 0, orbitState.width),
-      y: clamp(Number(p.y) || orbitState.positions[slider.path]?.y || 0, 0, orbitState.height)
+  const disabledPaths = new Set(Array.isArray(remoteOrbit.disabledPaths) ? remoteOrbit.disabledPaths : []);
+  for (const [path, local] of Object.entries(baseState.controls)) {
+    const incoming = positions[path];
+    next.controls[path] = {
+      ...local,
+      x: incoming && Number.isFinite(incoming.x) ? Number(incoming.x) : local.x,
+      y: incoming && Number.isFinite(incoming.y) ? Number(incoming.y) : local.y,
+      enabled: disabledPaths.has(path) ? false : local.enabled
     };
   }
-  constrainOrbitPositions();
-  scheduleOrbitDraw();
+  return next;
 }
 
 function clamp(value, min, max) {
@@ -2192,7 +2238,9 @@ function applyRemoteRunParams(remoteParams) {
       // Keep local hold authoritative while button is actively pressed by user.
       continue;
     }
-    const normalizedValue = normalizeRestoredParamValue(path, value);
+    // Runtime remote sync must preserve actual values, including button=1.
+    // Legacy button reset normalization is only for cold restore paths.
+    const normalizedValue = value;
     if (paramValues[path] === normalizedValue) continue;
     try {
       if (dspNode) {
@@ -2773,6 +2821,12 @@ export function dispose() {
   outputParamHandlerAttached = false;
   uiZoom = 'auto';
   orbitZoom = '100';
+  orbitUiBatchDepth = 0;
+  orbitUiBatchSnapshotPending = false;
+  if (orbitUiInstance) {
+    orbitUiInstance.destroy();
+    orbitUiInstance = null;
+  }
   uiZoomWrap = null;
   uiZoomStage = null;
   teardownUiZoomObserver();
@@ -2937,7 +2991,7 @@ async function resumeAudioContext() {
   }
   if (audioContext.state !== 'running') {
     throw new Error(
-      'Audio start blocked by browser policy. Click "Start Audio" once in Run view to unlock audio.'
+      'Audio start blocked by browser policy. Click "Audio | Off" once in Run view to unlock audio.'
     );
   }
 }

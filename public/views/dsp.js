@@ -113,17 +113,38 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
     const lineCount = lines.length;
 
     container.innerHTML = `
-      <div class="code-editor">
-        <div class="line-numbers">${generateLineNumbers(lineCount)}</div>
-        <div class="code-content">${highlightFaust(code)}</div>
+      <div class="code-view">
+        <div class="code-toolbar">
+          <span class="code-toolbar-title">DSP CODE</span>
+          <div class="code-toolbar-controls">
+            <div class="code-zoom-group">
+              <span class="code-zoom-label">Zoom</span>
+              <select class="code-zoom-select" aria-label="DSP code zoom">
+                <option value="50">50%</option>
+                <option value="75">75%</option>
+                <option value="100" selected>100%</option>
+                <option value="125">125%</option>
+                <option value="150">150%</option>
+                <option value="200">200%</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="code-editor">
+          <div class="line-numbers">${generateLineNumbers(lineCount)}</div>
+          <div class="code-content">${highlightFaust(code)}</div>
+        </div>
       </div>
     `;
 
     // Synchroniser le scroll
     const lineNumbers = container.querySelector('.line-numbers');
     const codeContent = container.querySelector('.code-content');
+    const zoomSelect = container.querySelector('.code-zoom-select');
+    const baseLineNumbersFontSize = parseFloat(getComputedStyle(lineNumbers).fontSize) || 14;
+    const baseCodeFontSize = parseFloat(getComputedStyle(codeContent).fontSize) || 14;
 
-    const lineHeight =
+    let lineHeight =
       (lineNumbers.scrollHeight && lineCount
         ? lineNumbers.scrollHeight / lineCount
         : parseFloat(getComputedStyle(codeContent).lineHeight)) || 16;
@@ -176,6 +197,27 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
 
       applyWithCorrection();
     };
+
+    const refreshLineHeight = () => {
+      lineHeight =
+        (lineNumbers.scrollHeight && lineCount
+          ? lineNumbers.scrollHeight / lineCount
+          : parseFloat(getComputedStyle(codeContent).lineHeight)) || lineHeight || 16;
+    };
+
+    const applyZoom = (zoom) => {
+      const factor = Math.max(50, Math.min(200, Number(zoom) || 100)) / 100;
+      const topLine = getTopLine();
+      lineNumbers.style.fontSize = `${(baseLineNumbersFontSize * factor).toFixed(2)}px`;
+      codeContent.style.fontSize = `${(baseCodeFontSize * factor).toFixed(2)}px`;
+      refreshLineHeight();
+      applyTopLine(topLine);
+    };
+
+    if (zoomSelect) {
+      zoomSelect.addEventListener('change', () => applyZoom(parseInt(zoomSelect.value, 10)));
+    }
+    applyZoom(100);
 
     if (scrollState && typeof scrollState.line === 'number') {
       let attempts = 0;

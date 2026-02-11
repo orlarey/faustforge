@@ -53,10 +53,11 @@ const ONBOARDING_GUIDE = {
     '1) set_view("run")',
     '2) get_polyphony() then set_polyphony(...) if needed (0=mono)',
     '3) get_run_ui() and get_run_params()',
-    '4) For continuous params: set_run_param_and_get_spectrum(...)',
-    '5) For transient buttons: trigger_button_and_get_spectrum(...)',
-    '6) For note events: prefer midi_note_*_and_get_spectrum(...)',
-    '7) Compare aggregate.summary and iterate one parameter at a time'
+    '4) run_audio("on")',
+    '5) For continuous params: set_run_param_and_get_spectrum(...)',
+    '6) For transient buttons: trigger_button_and_get_spectrum(...)',
+    '7) For note events: prefer midi_note_*_and_get_spectrum(...)',
+    '8) Compare aggregate.summary and iterate one parameter at a time'
   ],
   toolHints: {
     polyphony: 'Use set_polyphony(0) for mono, else 1/2/4/8/16/32/64.',
@@ -1188,10 +1189,30 @@ server.registerTool(
 );
 
 server.registerTool(
+  'run_audio',
+  {
+    description:
+      'Control run audio state: on, off, or toggle. on/toggle require audio unlocked by one UI click ("Enable Audio").',
+    inputSchema: {
+      state: z.enum(['on', 'off', 'toggle'])
+    }
+  },
+  async ({ state }) => {
+    await ensureRunView().catch(() => {});
+    if (state === 'on' || state === 'toggle') {
+      await ensureAudioUnlocked();
+    }
+    const action = state === 'on' ? 'start' : state === 'off' ? 'stop' : 'toggle';
+    const result = await runTransport(action);
+    return toResult({ sha1: result.sha1, runTransport: result.runTransport, state });
+  }
+);
+
+server.registerTool(
   'run_transport',
   {
     description:
-      'Control run transport: start, stop, or toggle audio. Start/toggle require audio unlocked by one UI click ("Enable Audio").',
+      'Control run transport: start, stop, or toggle audio. (Legacy alias; prefer run_audio with on/off/toggle.) Start/toggle require audio unlocked by one UI click ("Enable Audio").',
     inputSchema: {
       action: z.enum(['start', 'stop', 'toggle'])
     }

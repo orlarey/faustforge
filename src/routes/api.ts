@@ -29,56 +29,56 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
   }
 
-  async function zipDirectory(
+  async function tarGzDirectory(
     sessionPath: string,
     dirName: string,
     outFile: string
-  ): Promise<{ success: boolean; errors: string; zipPath?: string }> {
+  ): Promise<{ success: boolean; errors: string; archivePath?: string }> {
     const dirPath = path.join(sessionPath, dirName);
     if (!fs.existsSync(dirPath)) {
       return { success: false, errors: 'Directory not found' };
     }
 
-    const zipPath = path.join(sessionPath, outFile);
-    const zipped = await createZipArchive(sessionPath, zipPath, dirName);
-    if (!zipped.success || !fs.existsSync(zipPath)) {
-      return { success: false, errors: zipped.errors || 'Zip failed' };
+    const archivePath = path.join(sessionPath, outFile);
+    const archived = await createTarGzArchive(sessionPath, archivePath, dirName);
+    if (!archived.success || !fs.existsSync(archivePath)) {
+      return { success: false, errors: archived.errors || 'Archive failed' };
     }
-    return { success: true, errors: '', zipPath };
+    return { success: true, errors: '', archivePath };
   }
 
-  async function zipFromDirectory(
+  async function tarGzFromDirectory(
     sourceDir: string,
-    outZipPath: string
+    outArchivePath: string
   ): Promise<{ success: boolean; errors: string }> {
-    return createZipArchive(sourceDir, outZipPath, '.');
+    return createTarGzArchive(sourceDir, outArchivePath, '.');
   }
 
-  async function createZipArchive(
+  async function createTarGzArchive(
     cwd: string,
-    outZipPath: string,
+    outArchivePath: string,
     targetPath: string
   ): Promise<{ success: boolean; errors: string }> {
-    const zipCmd = await runZipCommand(cwd, outZipPath, targetPath);
-    if (zipCmd.success) {
-      return zipCmd;
+    const tarCmd = await runTarCommand(cwd, outArchivePath, targetPath);
+    if (tarCmd.success) {
+      return tarCmd;
     }
-    if (!zipCmd.notFound) {
-      return zipCmd;
+    if (!tarCmd.notFound) {
+      return tarCmd;
     }
 
-    // Fallback when `zip` is not installed (e.g. minimal docker images).
-    return runPythonZip(cwd, outZipPath, targetPath);
+    // Fallback when `tar` is not installed.
+    return runPythonTar(cwd, outArchivePath, targetPath);
   }
 
-  async function runZipCommand(
+  async function runTarCommand(
     cwd: string,
-    outZipPath: string,
+    outArchivePath: string,
     targetPath: string
   ): Promise<{ success: boolean; errors: string; notFound?: boolean }> {
     return new Promise((resolve) => {
-      const args = ['-r', '-q', outZipPath, targetPath];
-      const proc = spawn('zip', args, { cwd });
+      const args = ['-czf', outArchivePath, targetPath];
+      const proc = spawn('tar', args, { cwd });
       let stderr = '';
 
       proc.stderr.on('data', (data) => {
@@ -86,8 +86,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       });
 
       proc.on('close', (code) => {
-        if (code !== 0 || !fs.existsSync(outZipPath)) {
-          resolve({ success: false, errors: stderr || 'Zip failed' });
+        if (code !== 0 || !fs.existsSync(outArchivePath)) {
+          resolve({ success: false, errors: stderr || 'tar failed' });
           return;
         }
         resolve({ success: true, errors: '' });
@@ -95,22 +95,22 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
 
       proc.on('error', (err: NodeJS.ErrnoException) => {
         if (err && err.code === 'ENOENT') {
-          resolve({ success: false, errors: 'zip command not found', notFound: true });
+          resolve({ success: false, errors: 'tar command not found', notFound: true });
           return;
         }
-        resolve({ success: false, errors: `Zip error: ${err.message}` });
+        resolve({ success: false, errors: `tar error: ${err.message}` });
       });
     });
   }
 
-  async function runPythonZip(
+  async function runPythonTar(
     cwd: string,
-    outZipPath: string,
+    outArchivePath: string,
     targetPath: string
   ): Promise<{ success: boolean; errors: string }> {
     return new Promise((resolve) => {
       const pythonCode = [
-        'import os, sys, zipfile',
+        'import os, sys, tarfile',
         'base = sys.argv[1]',
         'out_path = sys.argv[2]',
         'target = sys.argv[3]',
@@ -118,36 +118,33 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
         'if not os.path.exists(target_path):',
         "    print('Target not found', file=sys.stderr)",
         '    sys.exit(2)',
-        "zf = zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED)",
+        "tf = tarfile.open(out_path, 'w:gz')",
         'if os.path.isfile(target_path):',
         '    rel = os.path.relpath(target_path, base)',
-        '    zf.write(target_path, rel)',
+        '    tf.add(target_path, arcname=rel)',
         'else:',
-        '    for root, _dirs, files in os.walk(target_path):',
-        '        for name in files:',
-        '            full = os.path.join(root, name)',
-        '            rel = os.path.relpath(full, base)',
-        '            zf.write(full, rel)',
-        'zf.close()'
+        '    rel = os.path.relpath(target_path, base)',
+        '    tf.add(target_path, arcname=rel)',
+        'tf.close()'
       ].join('; ');
-      const proc = spawn('python3', ['-c', pythonCode, cwd, outZipPath, targetPath], { cwd });
+      const proc = spawn('python3', ['-c', pythonCode, cwd, outArchivePath, targetPath], { cwd });
       let stderr = '';
       proc.stderr.on('data', (data) => {
         stderr += data.toString();
       });
       proc.on('close', (code) => {
-        if (code !== 0 || !fs.existsSync(outZipPath)) {
-          resolve({ success: false, errors: stderr || 'Zip failed (python fallback)' });
+        if (code !== 0 || !fs.existsSync(outArchivePath)) {
+          resolve({ success: false, errors: stderr || 'tar.gz failed (python fallback)' });
           return;
         }
         resolve({ success: true, errors: '' });
       });
       proc.on('error', (err: NodeJS.ErrnoException) => {
         if (err && err.code === 'ENOENT') {
-          resolve({ success: false, errors: 'Neither zip nor python3 is available to create archives' });
+          resolve({ success: false, errors: 'Neither tar nor python3 is available to create archives' });
           return;
         }
-        resolve({ success: false, errors: `Python zip error: ${err.message}` });
+        resolve({ success: false, errors: `Python tar error: ${err.message}` });
       });
     });
   }
@@ -874,7 +871,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
 
   /**
    * GET /:sha/download/svg
-   * Télécharge les SVG sous forme de zip
+   * Télécharge les SVG sous forme de tar.gz
    */
   router.get('/:sha/download/svg', async (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -884,14 +881,14 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return;
     }
 
-    const result = await zipDirectory(session.path, 'svg', 'svg.zip');
-    if (!result.success || !result.zipPath) {
+    const result = await tarGzDirectory(session.path, 'svg', 'svg.tar.gz');
+    if (!result.success || !result.archivePath) {
       res.status(404).json({ error: result.errors || 'SVG not available' });
       return;
     }
 
     const base = session.filename.replace(/\.dsp$/i, '') || 'session';
-    res.download(result.zipPath, `${base}-svg.zip`);
+    res.download(result.archivePath, `${base}-svg.tar.gz`);
   });
 
   /**
@@ -944,7 +941,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
 
   /**
    * GET /:sha/download/pwa
-   * Télécharge l'application PWA (webapp) sous forme de zip
+   * Télécharge l'application PWA (webapp) sous forme de tar.gz
    */
   router.get('/:sha/download/pwa', async (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -960,25 +957,25 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return;
     }
 
-    const result = await zipDirectory(session.path, 'webapp', 'webapp.zip');
-    if (!result.success || !result.zipPath) {
+    const result = await tarGzDirectory(session.path, 'webapp', 'webapp.tar.gz');
+    if (!result.success || !result.archivePath) {
       res.status(404).json({ error: result.errors || 'Webapp not available' });
       return;
     }
 
     const base = session.filename.replace(/\.dsp$/i, '') || 'session';
-    res.download(result.zipPath, `${base}-pwa.zip`);
+    res.download(result.archivePath, `${base}-pwa.tar.gz`);
   });
 
   /**
    * GET /download/archive/dsp
-   * Télécharge une archive ZIP de tous les fichiers DSP des sessions.
+   * Télécharge une archive tar.gz de tous les fichiers DSP des sessions.
    */
   router.get('/download/archive/dsp', async (_req: Request, res: Response) => {
     const tempBase = fs.existsSync(sessionsBaseDir) ? sessionsBaseDir : osTmpFallback();
     const tempRoot = fs.mkdtempSync(path.join(tempBase, 'faust-archive-'));
     const stagingDir = path.join(tempRoot, 'dsp-archive');
-    const zipPath = path.join(tempRoot, 'faustforge-dsp-archive.zip');
+    const archivePath = path.join(tempRoot, 'faustforge-dsp-archive.tar.gz');
     fs.mkdirSync(stagingDir, { recursive: true });
 
     try {
@@ -1012,13 +1009,13 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
         return;
       }
 
-      const zipped = await zipFromDirectory(stagingDir, zipPath);
-      if (!zipped.success) {
-        res.status(500).json({ error: zipped.errors || 'Archive generation failed' });
+      const archived = await tarGzFromDirectory(stagingDir, archivePath);
+      if (!archived.success) {
+        res.status(500).json({ error: archived.errors || 'Archive generation failed' });
         return;
       }
 
-      res.download(zipPath, 'faustforge-dsp-archive.zip');
+      res.download(archivePath, 'faustforge-dsp-archive.tar.gz');
     } finally {
       res.on('finish', () => {
         fs.rmSync(tempRoot, { recursive: true, force: true });

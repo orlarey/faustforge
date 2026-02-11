@@ -39,14 +39,29 @@ export async function render(container, { sha }) {
     container.innerHTML = `
       <div class="svg-view">
         <div class="svg-toolbar">
-          <button class="svg-nav-btn icon-btn" data-action="back" disabled title="Back">&#9664;</button>
-          <button class="svg-nav-btn icon-btn" data-action="home" title="Process">&#8962;</button>
-          <span class="svg-current-file"></span>
-          <div class="spacer"></div>
-          <button class="svg-zoom-btn icon-btn" data-zoom="out" title="Zoom -">-</button>
-          <span class="svg-zoom-level">100%</span>
-          <button class="svg-zoom-btn icon-btn" data-zoom="in" title="Zoom +">+</button>
-          <button class="svg-zoom-btn icon-btn" data-zoom="fit" title="Fit to view">Fit</button>
+          <span class="svg-toolbar-title">Diagrams</span>
+          <div class="svg-toolbar-controls">
+            <div class="svg-toolbar-pill svg-file-pill">
+              <span>File</span>
+              <span class="svg-current-file"></span>
+            </div>
+            <div class="svg-toolbar-pill svg-nav-pill">
+              <button class="svg-nav-btn svg-pill-action svg-nav-single" data-action="up" disabled title="Up to parent">Nav &#8593;</button>
+            </div>
+            <div class="svg-toolbar-pill svg-zoom-pill">
+              <span>Zoom</span>
+              <div class="svg-pill-value">
+                <select class="svg-zoom-select" aria-label="Diagram zoom">
+                  <option value="auto">Auto</option>
+                  <option value="50">50%</option>
+                  <option value="75">75%</option>
+                  <option value="100" selected>100%</option>
+                  <option value="125">125%</option>
+                  <option value="150">150%</option>
+                </select>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="svg-container">
           <div class="svg-progress hidden">
@@ -59,11 +74,12 @@ export async function render(container, { sha }) {
 
     const svgContent = container.querySelector('.svg-content');
     const svgContainer = container.querySelector('.svg-container');
-    const zoomLevel = container.querySelector('.svg-zoom-level');
-    const backBtn = container.querySelector('[data-action="back"]');
+    const zoomSelect = container.querySelector('.svg-zoom-select');
+    const upBtn = container.querySelector('[data-action="up"]');
     const currentFileLabel = container.querySelector('.svg-current-file');
     const progressOverlay = container.querySelector('.svg-progress');
     let currentZoom = 100;
+    let zoomMode = 'manual';
 
     // Gestionnaire de clics SVG (en phase capture comme faustservice)
     function svgClickHandler(e) {
@@ -106,7 +122,7 @@ export async function render(container, { sha }) {
       currentFile = filename;
 
       // Mettre à jour l'UI
-      backBtn.disabled = history.length === 0;
+      upBtn.disabled = currentFile === mainFile;
       currentFileLabel.textContent = filename;
 
       try {
@@ -130,76 +146,68 @@ export async function render(container, { sha }) {
       }
     }
 
-    // Retour en arrière
-    function goBack() {
+    // Remonte d'un niveau; au sommet, rester sur process.svg.
+    function goUp() {
+      if (currentFile === mainFile) return;
       if (history.length > 0) {
         const prev = history.pop();
         loadSvg(prev, false);
+        return;
       }
+      loadSvg(mainFile, false);
     }
 
-    // Aller au diagramme principal
-    function goHome() {
-      if (currentFile !== mainFile) {
-        loadSvg(mainFile);
-      }
+    function computeFitZoom() {
+      const svg = svgContent.querySelector('svg');
+      if (!svg) return currentZoom;
+      svg.style.transform = 'none';
+      const svgRect = svg.getBoundingClientRect();
+      const containerRect = svgContainer.getBoundingClientRect();
+      if (!svgRect.width || !svgRect.height) return currentZoom;
+      const widthRatio = (containerRect.width - 40) / svgRect.width;
+      const heightRatio = (containerRect.height - 40) / svgRect.height;
+      const fitRatio = Math.min(widthRatio, heightRatio, 1);
+      return Math.max(25, Math.min(400, Math.round(fitRatio * 100)));
     }
 
     // Appliquer le zoom
     function applyZoom() {
       const svg = svgContent.querySelector('svg');
-      if (svg) {
-        svg.style.transform = `scale(${currentZoom / 100})`;
-        svg.style.transformOrigin = 'top left';
-      }
-      zoomLevel.textContent = `${currentZoom}%`;
-    }
-
-    // Ajuster le zoom pour que le SVG rentre dans le conteneur
-    function fitToContainer() {
-      const svg = svgContent.querySelector('svg');
       if (!svg) return;
-
-      // Reset zoom pour mesurer la taille réelle
-      svg.style.transform = 'none';
-      const svgRect = svg.getBoundingClientRect();
-      const containerRect = svgContainer.getBoundingClientRect();
-
-      // Calculer le ratio pour ajuster
-      const widthRatio = (containerRect.width - 40) / svgRect.width;
-      const heightRatio = (containerRect.height - 40) / svgRect.height;
-      const fitRatio = Math.min(widthRatio, heightRatio, 1); // Ne pas dépasser 100%
-
-      currentZoom = Math.round(fitRatio * 100);
-      applyZoom();
+      if (zoomMode === 'auto') {
+        currentZoom = computeFitZoom();
+      }
+      svg.style.transform = `scale(${currentZoom / 100})`;
+      svg.style.transformOrigin = 'top left';
     }
 
     // Événements navigation
     container.querySelectorAll('.svg-nav-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const action = btn.dataset.action;
-        if (action === 'back') goBack();
-        else if (action === 'home') goHome();
+        if (action === 'up') goUp();
       });
     });
 
-    // Événements zoom
-    container.querySelectorAll('.svg-zoom-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const action = btn.dataset.zoom;
-        if (action === 'in') {
-          currentZoom = Math.min(currentZoom + 25, 400);
+    if (zoomSelect) {
+      zoomSelect.addEventListener('change', () => {
+        if (zoomSelect.value === 'auto') {
+          zoomMode = 'auto';
           applyZoom();
-        } else if (action === 'out') {
-          currentZoom = Math.max(currentZoom - 25, 25);
-          applyZoom();
-        } else if (action === 'fit') {
-          fitToContainer();
+          return;
         }
+        zoomMode = 'manual';
+        const parsed = parseInt(zoomSelect.value, 10);
+        currentZoom = Number.isFinite(parsed) ? parsed : 100;
+        applyZoom();
       });
-    });
+    }
 
     // Charger le SVG initial
+    if (zoomSelect) {
+      zoomSelect.value = 'auto';
+      zoomMode = 'auto';
+    }
     await loadSvg(mainFile, false);
 
   } catch (err) {

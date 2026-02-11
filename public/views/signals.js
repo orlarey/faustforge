@@ -17,6 +17,60 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;');
 }
 
+function highlightDot(dot) {
+  const tokens = [];
+  let tokenId = 0;
+
+  function placeholder(html) {
+    const id = `__DOT_TOKEN_${tokenId++}__`;
+    tokens.push({ id, html });
+    return id;
+  }
+
+  let result = escapeHtml(dot);
+
+  result = result.replace(/(\/\*[\s\S]*?\*\/)/g, (match) => {
+    return placeholder(`<span class="dot-comment">${match}</span>`);
+  });
+
+  result = result.replace(/(^\s*#.*$)/gm, (match) => {
+    return placeholder(`<span class="dot-comment">${match}</span>`);
+  });
+
+  result = result.replace(/(\/\/[^\n]*)/g, (match) => {
+    return placeholder(`<span class="dot-comment">${match}</span>`);
+  });
+
+  result = result.replace(/("(?:[^"\\]|\\.)*")/g, (match) => {
+    return placeholder(`<span class="dot-string">${match}</span>`);
+  });
+
+  result = result.replace(/\b(strict|graph|digraph|subgraph|node|edge)\b/g, (match) => {
+    return placeholder(`<span class="dot-keyword">${match}</span>`);
+  });
+
+  result = result.replace(
+    /\b(rankdir|rank|label|shape|style|color|fillcolor|fontcolor|fontsize|fontname|penwidth|weight|dir|arrowhead|arrowsize|labelloc|labeljust|splines|constraint|ordering|group|peripheries|margin|width|height|fixedsize)\b/g,
+    (match) => {
+      return placeholder(`<span class="dot-attr">${match}</span>`);
+    }
+  );
+
+  result = result.replace(/\b(\d+\.?\d*)\b/g, (match) => {
+    return placeholder(`<span class="dot-number">${match}</span>`);
+  });
+
+  result = result.replace(/(\-\>|--|=|\{|\}|\[|\]|,|:)/g, (match) => {
+    return placeholder(`<span class="dot-operator">${match}</span>`);
+  });
+
+  for (const token of tokens) {
+    result = result.replace(token.id, token.html);
+  }
+
+  return result;
+}
+
 function generateLineNumbers(lineCount) {
   const lines = [];
   for (let i = 1; i <= lineCount; i++) {
@@ -30,7 +84,7 @@ function renderDotViewer(dotRoot, dot) {
   dotRoot.innerHTML = `
     <div class="code-editor dot-editor">
       <div class="line-numbers">${generateLineNumbers(lineCount)}</div>
-      <div class="code-content">${escapeHtml(dot)}</div>
+      <div class="code-content">${highlightDot(dot)}</div>
     </div>
   `;
   const lineNumbers = dotRoot.querySelector('.line-numbers');
@@ -132,12 +186,21 @@ export async function render(container, { sha, onError, onClearError }) {
   container.innerHTML = `
     <div class="signals-view">
       <div class="signals-toolbar">
-        <button class="signals-zoom-btn icon-btn" data-zoom="out" title="Zoom -">-</button>
-        <span class="signals-zoom-level">100%</span>
-        <button class="signals-zoom-btn icon-btn" data-zoom="in" title="Zoom +">+</button>
-        <button class="signals-zoom-btn icon-btn" data-zoom="fit" title="Fit to view">Fit</button>
-        <div class="spacer"></div>
-        <button class="signals-toggle-dot icon-btn" title="Show/hide DOT source">DOT</button>
+        <span class="signals-toolbar-title">SIGNAL GRAPH</span>
+        <div class="signals-toolbar-controls">
+          <div class="signals-zoom-group">
+            <span class="signals-zoom-label">Zoom</span>
+            <select class="signals-zoom-select" aria-label="Signal graph zoom">
+              <option value="auto">Auto</option>
+              <option value="50">50%</option>
+              <option value="75">75%</option>
+              <option value="100" selected>100%</option>
+              <option value="125">125%</option>
+              <option value="150">150%</option>
+            </select>
+          </div>
+          <button class="signals-toggle-split" title="Show/hide split graph and DOT source">Split view</button>
+        </div>
       </div>
       <div class="signals-main">
         <div class="signals-container">
@@ -152,12 +215,15 @@ export async function render(container, { sha, onError, onClearError }) {
   const content = container.querySelector('.signals-content');
   const dotPre = container.querySelector('.signals-dot');
   const splitter = container.querySelector('.signals-splitter');
-  const zoomLevel = container.querySelector('.signals-zoom-level');
-  const toggleDotBtn = container.querySelector('.signals-toggle-dot');
+  const zoomSelect = container.querySelector('.signals-zoom-select');
+  const toggleDotBtn = container.querySelector('.signals-toggle-split');
   const containerEl = container.querySelector('.signals-container');
   const mainEl = container.querySelector('.signals-main');
   let zoom = 100;
+  let zoomMode = 'auto';
   let splitPercent = 65;
+  let baseWidth = 0;
+  let baseHeight = 0;
 
   renderDotViewer(dotPre, dot);
   function applySplit() {
@@ -201,42 +267,58 @@ export async function render(container, { sha, onError, onClearError }) {
     window.addEventListener('mouseup', onUp);
   });
 
+  function computeFitZoom() {
+    const svg = content.querySelector('svg');
+    if (!svg) return zoom;
+    if (!baseWidth || !baseHeight) {
+      svg.style.width = '';
+      svg.style.height = '';
+      const svgRect = svg.getBoundingClientRect();
+      baseWidth = svgRect.width;
+      baseHeight = svgRect.height;
+    }
+    const cRect = containerEl.getBoundingClientRect();
+    if (!baseWidth || !baseHeight || !cRect.width || !cRect.height) return zoom;
+    const widthRatio = (cRect.width - 24) / baseWidth;
+    const heightRatio = (cRect.height - 24) / baseHeight;
+    const fitRatio = Math.min(widthRatio, heightRatio, 1);
+    return Math.max(10, Math.round(fitRatio * 100));
+  }
+
   function applyZoom() {
     const svg = content.querySelector('svg');
     if (!svg) return;
-    svg.style.transform = `scale(${zoom / 100})`;
-    svg.style.transformOrigin = 'top left';
-    zoomLevel.textContent = `${zoom}%`;
+    if (!baseWidth || !baseHeight) {
+      svg.style.width = '';
+      svg.style.height = '';
+      const svgRect = svg.getBoundingClientRect();
+      baseWidth = svgRect.width;
+      baseHeight = svgRect.height;
+    }
+    if (zoomMode === 'auto') {
+      zoom = computeFitZoom();
+    }
+    const scale = zoom / 100;
+    const nextWidth = Math.max(1, Math.round(baseWidth * scale));
+    const nextHeight = Math.max(1, Math.round(baseHeight * scale));
+    svg.style.width = `${nextWidth}px`;
+    svg.style.height = `${nextHeight}px`;
+    content.classList.toggle('signals-auto-centered', zoomMode === 'auto');
   }
 
-  function fitToContainer() {
-    const svg = content.querySelector('svg');
-    if (!svg) return;
-    svg.style.transform = 'none';
-    const svgRect = svg.getBoundingClientRect();
-    const cRect = containerEl.getBoundingClientRect();
-    if (!svgRect.width || !svgRect.height) return;
-    const widthRatio = (cRect.width - 40) / svgRect.width;
-    const heightRatio = (cRect.height - 40) / svgRect.height;
-    const fitRatio = Math.min(widthRatio, heightRatio, 1);
-    zoom = Math.max(10, Math.round(fitRatio * 100));
-    applyZoom();
-  }
-
-  container.querySelectorAll('.signals-zoom-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const action = btn.dataset.zoom;
-      if (action === 'in') {
-        zoom = Math.min(zoom + 25, 400);
+  if (zoomSelect) {
+    zoomSelect.addEventListener('change', () => {
+      if (zoomSelect.value === 'auto') {
+        zoomMode = 'auto';
         applyZoom();
-      } else if (action === 'out') {
-        zoom = Math.max(zoom - 25, 10);
-        applyZoom();
-      } else if (action === 'fit') {
-        fitToContainer();
+        return;
       }
+      zoomMode = 'manual';
+      const parsed = parseInt(zoomSelect.value, 10);
+      zoom = Number.isFinite(parsed) ? parsed : 100;
+      applyZoom();
     });
-  });
+  }
 
   try {
     const Viz = await ensureViz();
@@ -244,7 +326,13 @@ export async function render(container, { sha, onError, onClearError }) {
     const svg = await viz.renderSVGElement(dot);
     content.innerHTML = '';
     content.appendChild(svg);
-    fitToContainer();
+    baseWidth = 0;
+    baseHeight = 0;
+    if (zoomSelect) {
+      zoomSelect.value = 'auto';
+    }
+    zoomMode = 'auto';
+    applyZoom();
     if (typeof onClearError === 'function') {
       onClearError();
     }

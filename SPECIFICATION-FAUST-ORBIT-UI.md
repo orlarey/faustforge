@@ -112,6 +112,17 @@ Gestures:
 - drag outer ring -> update all enabled controls
 - shift+click control point -> toggle `enabled`
 
+Local-drag authority rule:
+- while a local drag is active (point/center/ring), control point positions are user-authoritative
+- external host updates (`setParamValue` / `setParams`) may update values but must not reposition points until drag end
+
+Value/position compatibility rule:
+- on `setParamValue(path, value)`, the control point is repositioned only if the incoming value is not compatible with its current position
+- if compatible, Orbit updates internal value state only and keeps point coordinates unchanged
+- compatibility is type-dependent:
+  - binary controls (`button`, `checkbox`): exact binary compatibility (`0|1`) from current distance-threshold mapping
+  - continuous controls: compatibility within a tolerance (`step/2` when `step > 0`)
+
 Distance mapping:
 - `d <= innerRadius` -> `value = max`
 - `d >= outerRadius` -> `value = min`
@@ -135,6 +146,8 @@ For `setOrbitState(state)`:
 - at zoom < 100%, background/grid fills full visible panel
 - pointer coordinate conversion includes zoom + render offsets
 - transient invalid resize (`<2px`) ignored
+- grid/background anchor is independent from current draggable center position
+- dragging center must not move the grid/background anchor
 
 `center()` behavior:
 - recenter `state.center` to panel center

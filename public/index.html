@@ -19,7 +19,10 @@
     </div>
     <div class="header-controls">
       <button id="refresh-session" class="icon-btn hidden" title="Refresh session" aria-label="Refresh session">↻</button>
-      <select id="view-select" title="View"></select>
+      <label class="header-pill header-view-pill" title="View">
+        <span>View</span>
+        <select id="view-select" aria-label="View"></select>
+      </label>
       <button id="delete-session" class="icon-btn" title="Delete session" aria-label="Delete session">🗑</button>
       <input type="file" id="file-input" accept=".dsp" hidden>
       <button id="archive-btn" class="primary-btn" title="Archive DSP" aria-label="Archive DSP">Archive</button>

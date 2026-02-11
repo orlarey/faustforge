@@ -23,9 +23,6 @@ WORKDIR /app
 
 # Docker CLI is required to run the Faust compiler container through /var/run/docker.sock.
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends zip \
-  && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
 ENV PORT=3000
