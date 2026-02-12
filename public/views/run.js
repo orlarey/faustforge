@@ -2,7 +2,8 @@
  * Vue Run
  * Exécute le DSP en WebAudio via FaustWASM
  */
-import { FaustOrbitUI } from './faust-orbit-ui.js';
+import { FaustOrbitUI } from '../vendor/faust-orbit-ui/faust-orbit-ui.js';
+import { TOOLTIP_TEXTS } from '../tooltip-texts.js';
 
 let audioContext = null;
 let dspNode = null;
@@ -1081,6 +1082,7 @@ function renderOrbitUi(container, ui) {
       if (emitRunStateFn) emitRunStateFn();
     },
     {
+      tooltips: TOOLTIP_TEXTS.orbit,
       onInteractionStart: () => {
         orbitUiBatchDepth += 1;
       },
@@ -1101,7 +1103,7 @@ function renderOrbitUi(container, ui) {
 
   orbitUiInstance.beginUpdate();
   try {
-    let nextState = orbitUiInstance.buildControls(ui);
+    let nextState = orbitUiInstance.buildControlsFromUnknown(ui);
     if (pendingOrbitUi && typeof pendingOrbitUi === 'object') {
       nextState = mergeRemoteOrbitState(nextState, pendingOrbitUi);
     }
