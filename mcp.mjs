@@ -47,7 +47,7 @@ const ONBOARDING_GUIDE = {
     'Control polyphony and MIDI notes when relevant'
   ],
   prerequisites: [
-    'If audio tools fail with "Audio is locked", ask the user to click "Enable Audio" once in Faustforge UI.'
+    'If audio tools fail with "Audio is locked", ask the user to switch Audio to "On" once in Run view.'
   ],
   workflow: [
     '1) set_view("run")',
@@ -684,9 +684,9 @@ server.registerTool(
 server.registerTool(
   'set_view',
   {
-    description: 'Set current view (dsp, cpp, svg, run).',
+    description: 'Set current view (dsp, cpp, svg, run, signals, tasks).',
     inputSchema: {
-      view: z.enum(['dsp', 'cpp', 'svg', 'run'])
+      view: z.enum(['dsp', 'cpp', 'svg', 'run', 'signals', 'tasks'])
     }
   },
   async ({ view }) => {
@@ -739,6 +739,16 @@ server.registerTool(
         return toResult({ view: 'run', mime: 'application/json', content });
       }
       throw new McpError(ErrorCode.InvalidParams, 'Run spectrum not available');
+    }
+
+    if (state.view === 'signals') {
+      const content = await requestText(`/api/${state.sha1}/signals.dot`);
+      return toResult({ view: 'signals', mime: 'text/vnd.graphviz', content });
+    }
+
+    if (state.view === 'tasks') {
+      const content = await requestText(`/api/${state.sha1}/tasks.dot`);
+      return toResult({ view: 'tasks', mime: 'text/vnd.graphviz', content });
     }
 
     throw new McpError(ErrorCode.InvalidParams, 'Unsupported view');
