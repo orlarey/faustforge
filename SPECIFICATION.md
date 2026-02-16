@@ -47,6 +47,61 @@ l’utilisateur web.
    Si l’utilisateur souhaite tester, l’IA bascule sur la vue **Run** et invite à démarrer
    l’audio dans le navigateur.
 
+## Scénario sessions statiques / live
+
+Objectif : conserver le modèle immuable par SHA‑1 tout en supportant l’édition live d’un fichier local.
+
+### Types de session
+
+- **Session statique** :
+  - créée par `drag & drop` ou `paste`
+  - identifiant = `sha1(contenu)`
+  - immuable (modification de contenu => autre session statique)
+
+- **Session live** :
+  - créée par `open file` (chemin local explicite)
+  - identifiant stable lié au fichier (format `live-<hash(path canonique)>`)
+  - mutable : suit les sauvegardes externes du fichier
+
+### Stockage disque
+
+- dossier unique `sessions/`
+- une session = un sous-dossier nommé par son identifiant:
+  - statique: `<sha1>`
+  - live: `live-<hash>`
+- distinction par `metadata.json.kind` (`static` ou `live`)
+- l’ordre chronologique est reconstruit au démarrage en scannant `sessions/*/metadata.json`
+
+### Règles de fonctionnement
+
+1. Lors d’un `save` externe d’une session live :
+   - relire le fichier `.dsp`
+   - recalculer `sha1(contenu)`
+   - si le SHA est inchangé : ne rien faire
+   - sinon : recompiler et mettre à jour les artefacts de la session live
+
+2. Session active :
+   - par défaut, un `save` externe d’une session live non active **ne bascule pas** l’UI
+   - la session est marquée `updated` (badge/notification discrète)
+   - option possible : `autoSwitchOnExternalSave = true`
+
+3. Promotion live -> statique :
+   - action utilisateur `freeze/promote`
+   - crée (ou réutilise) la session statique `sha1(contenu courant)`
+   - la session live peut rester ouverte
+
+4. Robustesse :
+   - fichier déplacé/supprimé => session live `broken` + action `Relink`
+   - sauvegardes rapides => debounce + politique `latest wins`
+
+### Invariants additionnels
+
+```text
+INV-LIVE-1 : Une session live correspond à un seul chemin canonique de fichier.
+INV-LIVE-2 : Deux sessions live ne peuvent pas pointer vers le même chemin canonique.
+INV-LIVE-3 : Une session statique reste strictement immuable.
+```
+
 ## Workflow Docker (conteneur unique)
 
 Objectif : exécuter l’interface web, l’API et le serveur MCP dans un seul conteneur,
@@ -123,6 +178,119 @@ Code     = String             -- code source Faust (UTF-8)
 Path     = String             -- chemin relatif dans la session
 Bytes    = ByteArray          -- données binaires
 View     = "dsp" | "cpp" | "svg" | "run"
+```
+
+### Modèle formel de synchronisation des paramètres Run
+
+Hypothèse: tous les acteurs partagent la même horloge (timestamps comparables).
+Acteurs:
+- `DSP` (source de vérité)
+- `UI visuelles` (regular, orbit)
+- `UI headless` (MCP), traitée comme une UI normale sans rendu graphique
+
+#### Types
+
+```text
+ParamId    = Path
+Value      = Number
+Timestamp  = Number          -- ms epoch
+UIId       = String
+
+ParamCell ::= {
+  v : Value,                 -- valeur canonique courante
+  d : Timestamp,             -- date de dernière écriture acceptée
+  owner : UIId | ⊥           -- UI détentrice du contrôle exclusif (⊥ = libre)
+}
+
+DSPState ::= {
+  params : Map<ParamId, ParamCell>
+}
+
+UIState ::= {
+  id     : UIId,
+  params : Map<ParamId, ParamCell>,
+  drag   : Set<ParamId>          -- paramètres localement manipulés
+}
+```
+
+#### Opérations abstraites (sans contrainte de transport)
+
+```text
+ReadSnapshot() -> DSPState
+
+SubmitDelta(uiId, updates, lockOps) -> Unit
+  where updates : Map<ParamId, ParamCell>
+        lockOps : {
+          acquire : Set<ParamId>,
+          release : Set<ParamId>
+        }
+```
+
+`ReadSnapshot` et `SubmitDelta` peuvent être implémentés en appels de fonctions,
+messages IPC, HTTP, etc. La spécification est indépendante du transport.
+
+#### Boucle de synchronisation côté UI
+
+Pour une UI `u`, cycle périodique:
+
+```text
+U1. S := ReadSnapshot()
+
+U2. Merge entrant (DSP -> UI):
+    pour chaque paramètre p:
+      si S.params[p].d > u.params[p].d alors
+        u.params[p] := S.params[p]
+
+U3. Construction du delta sortant (UI -> DSP):
+    updates[p] est émis seulement si:
+      a) u.params[p].d > S.params[p].d
+      b) (S.params[p].owner = ⊥) ou (S.params[p].owner = u.id)
+
+U4. Submit:
+    SubmitDelta(u.id, updates, lockOps)
+```
+
+#### Règles d’application côté DSP
+
+Pour chaque update `(p, cell)` reçu de `ui` (avec `v = cell.v`, `d = cell.d`):
+
+```text
+D1 (arbitrage lock):
+  accepter seulement si DSP.params[p].owner = ⊥ ou DSP.params[p].owner = ui
+
+D2 (fraîcheur):
+  accepter seulement si d >= DSP.params[p].d
+
+D3 (bornage):
+  v' = clamp(v, min(p), max(p))
+
+D4 (commit):
+  DSP.params[p].v := v'
+  DSP.params[p].d := d
+```
+
+Gestion des locks:
+
+```text
+L1: acquire(p) par ui
+    si DSP.params[p].owner = ⊥ ou DSP.params[p].owner = ui,
+    alors DSP.params[p].owner := ui
+
+L2: release(p) par ui
+    si DSP.params[p].owner = ui, alors DSP.params[p].owner := ⊥
+```
+
+Pendant qu’un paramètre `p` est locké par `uiA`, toute mise à jour provenant d’une autre
+UI `uiB != uiA` est ignorée pour `p`.
+
+#### Invariants
+
+```text
+INV-RUN-1 : Le DSP est la source de vérité: pour tout p, DSP.params[p].v est la valeur effective.
+INV-RUN-2 : Pour tout p, DSP.params[p].v ∈ [min(p), max(p)].
+INV-RUN-3 : Si DSP.params[p].owner = uiX, alors toute écriture de uiY != uiX sur p est rejetée.
+INV-RUN-4 : Monotonicité: pour tout p, DSP.params[p].d ne décroît jamais.
+INV-RUN-5 : Convergence: en absence de nouvelles écritures, toute UI converge vers ReadSnapshot().
 ```
 
 ### Structure d’une session

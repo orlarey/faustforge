@@ -5,6 +5,7 @@
 import { FaustOrbitUI } from '../vendor/faust-orbit-ui/faust-orbit-ui.js';
 import { TOOLTIP_TEXTS } from '../tooltip-texts.js';
 
+// Audio graph runtime (single active DSP instance for the Run view).
 let audioContext = null;
 let dspNode = null;
 let analyserNode = null;
@@ -23,7 +24,13 @@ let controlsContent = null;
 let controlsSplit = null;
 let controlsClassicPane = null;
 let controlsOrbitPane = null;
+// Shared param state for this view:
+// - `paramValues` is the fast numeric cache used by UI rendering and DSP polling.
+// - `paramCells` is the authoritative sync shape { v, d, owner } mirrored to backend.
+// - `paramMetaByPath` stores min/max bounds extracted from Faust UI JSON.
 let paramValues = {};
+let paramCells = {};
+let paramMetaByPath = new Map();
 let uiParamPaths = [];
 let uiButtonPaths = new Set();
 let uiButtonOrder = [];
@@ -65,7 +72,7 @@ let lastAppliedTriggerNonce = 0;
 let lastAppliedMidiNonce = 0;
 let isSwitchingPolyphony = false;
 let runViewEnteredAt = 0;
-let lastAppliedRemoteRunParamsUpdatedAt = 0;
+let lastAppliedRemoteRunParamsFingerprint = '';
 let lastAppliedRemoteOrbitNonce = 0;
 let orbitCanvas = null;
 let orbitBody = null;
@@ -87,22 +94,34 @@ let orbitParamSyncTimer = null;
 let orbitUiInstance = null;
 let orbitUiBatchDepth = 0;
 let orbitUiBatchSnapshotPending = false;
+let orbitPaneResizeObserver = null;
+let orbitPaneResizeRaf = null;
 let remoteSyncInFlight = false;
+// Owner identifier used by this front instance while a local UI interaction is active.
+const LOCAL_RUN_UI_OWNER = 'ui:run';
+// Delay before releasing local owner after the last local write on a parameter.
+const LOCAL_OWNER_RELEASE_MS = 220;
 const PARAM_SMOOTH_INTERVAL_MS = 16;
 const PARAM_SMOOTH_EPSILON = 1e-4;
 const ORBIT_PARAM_SYNC_INTERVAL_MS = 33;
 const ORBIT_POSITION_EPSILON = 0.25;
 const paramSmooth = new Map();
+const localOwnerReleaseTimers = new Map();
 
 export function getName() {
   return 'Run';
 }
 
+/**
+ * Point d'entrée de la vue Run.
+ * Monte l'UI, restaure l'état partagé, compile le DSP et démarre les boucles de sync.
+ */
 export async function render(container, { sha, runState, onRunStateChange }) {
-  cleanupAudio();
+  // Live auto-refresh can re-render Run without a view switch.
+  // Ensure no timer/listener/audio instance from a previous Run render survives.
+  dispose();
   currentSha = sha;
   runViewEnteredAt = Date.now();
-  lastAppliedRemoteRunParamsUpdatedAt = 0;
   lastSpectrumSummary = null;
   lastAudioQuality = null;
 
@@ -234,6 +253,11 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   scopeThreshold.value = String(scopeState.threshold);
   scopeHoldoff.value = String(scopeState.holdoffMs);
   paramValues = runState && runState.params ? { ...runState.params } : {};
+  paramCells = normalizeRunParamCells(runState && runState.paramCells ? runState.paramCells : runState?.params);
+  for (const [path, cell] of Object.entries(paramCells)) {
+    paramValues[path] = cell.v;
+  }
+  paramMetaByPath = new Map();
   pendingOrbitUi = runState && runState.orbitUi ? runState.orbitUi : null;
   const emitRunState = () => {
     if (typeof onRunStateChange === 'function') {
@@ -524,6 +548,10 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     }
   }
 
+/**
+ * Pull périodique de l'état partagé backend.
+ * Applique seulement les deltas pertinents (params, transport, trigger, MIDI, orbit).
+ */
 async function syncRemoteRunState() {
     if (!currentSha) return;
     if (remoteSyncInFlight) return;
@@ -534,14 +562,13 @@ async function syncRemoteRunState() {
       const remote = await response.json();
       if (!remote || remote.sha1 !== currentSha) return;
 
+      // Run params sync uses content fingerprinting so we can handle
+      // both legacy numeric maps and ParamCell maps without global timestamp coupling.
       if (remote.runParams && typeof remote.runParams === 'object') {
-        const remoteParamsUpdatedAt =
-          typeof remote.runParamsUpdatedAt === 'number' ? remote.runParamsUpdatedAt : 0;
-        if (!remoteParamsUpdatedAt || remoteParamsUpdatedAt > lastAppliedRemoteRunParamsUpdatedAt) {
+        const fingerprint = fingerprintRunParams(remote.runParams);
+        if (fingerprint && fingerprint !== lastAppliedRemoteRunParamsFingerprint) {
           applyRemoteRunParams(remote.runParams);
-          if (remoteParamsUpdatedAt) {
-            lastAppliedRemoteRunParamsUpdatedAt = remoteParamsUpdatedAt;
-          }
+          lastAppliedRemoteRunParamsFingerprint = fingerprint;
         }
       }
 
@@ -611,6 +638,9 @@ async function syncRemoteRunState() {
 
 export function getState() {
   if (!scopeState) return null;
+  // Expose both formats:
+  // - `params` keeps compatibility with older consumers.
+  // - `paramCells` preserves per-param timestamp/owner semantics.
   return {
     audioRunning,
     polyVoices,
@@ -626,10 +656,15 @@ export function getState() {
       holdoffMs: scopeState.holdoffMs
     },
     params: { ...paramValues },
+    paramCells: cloneParamCells(paramCells),
     orbitUi: buildRunOrbitSnapshot(false)
   };
 }
 
+/**
+ * Compile le code Faust de la session active et construit les UIs Run.
+ * Initialise aussi les structures de paramètres partagés pour la sync multi-UI.
+ */
 async function compileAndRenderUI(container, sha, voices = 0) {
   const codeResponse = await fetch(`/api/${sha}/user_code.dsp`);
   if (!codeResponse.ok) {
@@ -704,6 +739,9 @@ function renderControls(container, ui) {
   updateUiRoot(container);
 }
 
+/**
+ * Extrait toutes les adresses de paramètres pilotables depuis la description Faust UI.
+ */
 function collectParamPaths(ui) {
   if (!Array.isArray(ui)) return [];
   const paths = [];
@@ -723,6 +761,10 @@ function collectParamPaths(ui) {
   return paths;
 }
 
+/**
+ * Initialise les valeurs locales à partir des valeurs `init` Faust.
+ * Les valeurs existantes (déjà synchronisées) restent prioritaires.
+ */
 function seedParamValuesFromUiDefaults(ui) {
   if (!Array.isArray(ui)) return;
   const walk = (node) => {
@@ -734,14 +776,36 @@ function seedParamValuesFromUiDefaults(ui) {
     if (Array.isArray(node.items)) node.items.forEach(walk);
     const path = node.address || node.path;
     if (!path) return;
+    const min = Number(node.min);
+    const max = Number(node.max);
+    if (Number.isFinite(min) && Number.isFinite(max)) {
+      paramMetaByPath.set(path, { min, max });
+    }
     const init = node.init;
     if (!Number.isFinite(init)) return;
-    if (typeof paramValues[path] === 'number' && Number.isFinite(paramValues[path])) return;
-    paramValues[path] = Number(init);
+    if (typeof paramValues[path] === 'number' && Number.isFinite(paramValues[path])) {
+      const clamped = clampParamValue(path, paramValues[path]);
+      paramValues[path] = clamped;
+      const existing = paramCells[path];
+      if (!existing || !Number.isFinite(existing.d)) {
+        paramCells[path] = { v: clamped, d: Date.now(), owner: null };
+      } else if (existing.v !== clamped) {
+        paramCells[path] = { ...existing, v: clamped };
+      }
+      return;
+    }
+    const clampedInit = clampParamValue(path, Number(init));
+    paramValues[path] = clampedInit;
+    if (!paramCells[path]) {
+      paramCells[path] = { v: clampedInit, d: Date.now(), owner: null };
+    }
   };
   walk(ui);
 }
 
+/**
+ * Construit le clavier MIDI virtuel et branche ses callbacks vers le DSP.
+ */
 function renderMidiKeyboard(container, ui, handlers, options = {}) {
   if (!container) return;
   detachComputerMidiKeyboard();
@@ -914,12 +978,18 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
   }
 }
 
+/**
+ * Met à jour l'état visuel d'une touche du clavier MIDI virtuel.
+ */
 function setMidiUiKeyActive(note, active) {
   const key = midiUiKeyByNote.get(note);
   if (!key) return;
   key.classList.toggle('active', active);
 }
 
+/**
+ * Relâche toutes les notes actives du clavier ordinateur (sécurité au blur/changement source).
+ */
 function releaseComputerMidiNotes(handlers) {
   const notes = new Set(midiComputerActiveNotes.values());
   midiComputerActiveNotes.clear();
@@ -931,6 +1001,9 @@ function releaseComputerMidiNotes(handlers) {
   }
 }
 
+/**
+ * Débranche les écouteurs clavier MIDI ordinateur et nettoie les notes actives.
+ */
 function detachComputerMidiKeyboard() {
   if (midiKeyboardKeyDownHandler) {
     window.removeEventListener('keydown', midiKeyboardKeyDownHandler);
@@ -955,6 +1028,9 @@ function detachComputerMidiKeyboard() {
   midiUiKeyByNote.clear();
 }
 
+/**
+ * Retourne vrai si l'utilisateur est en train de taper dans un champ texte/édition.
+ */
 function isTypingTarget(target) {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
@@ -962,6 +1038,9 @@ function isTypingTarget(target) {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
+/**
+ * Rend l'UI Faust "regular" (faust-ui) et branche les callbacks utilisateur -> setParamValue.
+ */
 async function renderFaustUi(container, ui) {
   ensureFaustUiCss();
   container.innerHTML = `
@@ -1034,7 +1113,8 @@ async function renderFaustUi(container, ui) {
         }
         setParamValue(path, value, {
           smooth: !isButton,
-          skipSnapshot: isButton
+          skipSnapshot: isButton,
+          owner: LOCAL_RUN_UI_OWNER
         });
         if (forceSnapshot) {
           sendRunParamsSnapshot(true);
@@ -1057,8 +1137,12 @@ async function renderFaustUi(container, ui) {
   }
 }
 
+/**
+ * Rend l'UI Orbit et branche ses interactions sur la même couche paramétrique partagée.
+ */
 function renderOrbitUi(container, ui) {
   if (!container) return;
+  teardownOrbitPaneResizeObserver();
   if (orbitUiInstance) {
     orbitUiInstance.destroy();
     orbitUiInstance = null;
@@ -1072,7 +1156,8 @@ function renderOrbitUi(container, ui) {
         smooth: !isButton,
         skipSnapshot: true,
         skipEmit: true,
-        skipOrbitSync: true
+        skipOrbitSync: true,
+        owner: LOCAL_RUN_UI_OWNER
       });
       if (orbitUiBatchDepth > 0) {
         orbitUiBatchSnapshotPending = true;
@@ -1116,10 +1201,43 @@ function renderOrbitUi(container, ui) {
     orbitUiInstance.endUpdate();
   }
 
+  setupOrbitPaneResizeObserver(container);
+  orbitUiInstance.resize();
   requestOrbitSyncFromParams(true);
   sendRunOrbitSnapshot(true);
 }
 
+function setupOrbitPaneResizeObserver(container) {
+  if (!container || typeof ResizeObserver === 'undefined') return;
+  orbitPaneResizeObserver = new ResizeObserver(() => {
+    if (!orbitUiInstance) return;
+    if (orbitPaneResizeRaf) return;
+    orbitPaneResizeRaf = requestAnimationFrame(() => {
+      orbitPaneResizeRaf = null;
+      if (!orbitUiInstance) return;
+      orbitUiInstance.resize();
+    });
+  });
+  orbitPaneResizeObserver.observe(container);
+}
+
+/**
+ * Libère les ressources de resize observer du panneau Orbit.
+ */
+function teardownOrbitPaneResizeObserver() {
+  if (orbitPaneResizeObserver) {
+    orbitPaneResizeObserver.disconnect();
+    orbitPaneResizeObserver = null;
+  }
+  if (orbitPaneResizeRaf) {
+    cancelAnimationFrame(orbitPaneResizeRaf);
+    orbitPaneResizeRaf = null;
+  }
+}
+
+/**
+ * Sélectionne les contrôles continus éligibles à la représentation Orbit.
+ */
 function collectOrbitSliders(ui) {
   if (!Array.isArray(ui)) return [];
   const sliders = [];
@@ -1150,6 +1268,9 @@ function collectOrbitSliders(ui) {
   return sliders;
 }
 
+/**
+ * Donne une couleur stable à un slider Orbit à partir de son path.
+ */
 function colorFromPath(path) {
   let hash = 0;
   for (let i = 0; i < path.length; i++) {
@@ -1159,17 +1280,29 @@ function colorFromPath(path) {
   return `hsl(${hue} 68% 62%)`;
 }
 
+/**
+ * Auto-désactive uniquement les paramètres MIDI pilotés en mode poly.
+ * Cible strictement les noms de token: `freq`, `gate`, `gain`.
+ */
 function shouldAutoDisableOrbitSlider(slider) {
   if (!slider) return false;
   if (polyVoices <= 0) return false;
   const text = `${slider.path || ''} ${slider.label || ''}`.toLowerCase();
-  return /(^|[^a-z])(freq|frequency|hz|pitch|gain|amp|velocity|vel)([^a-z]|$)/.test(text);
+  const tokens = text.split(/[^a-z0-9]+/).filter(Boolean);
+  const controlled = new Set(['freq', 'gate', 'gain']);
+  return tokens.some((token) => controlled.has(token));
 }
 
+/**
+ * Vérifie si un slider Orbit est temporairement désactivé.
+ */
 function isOrbitSliderDisabled(path) {
   return !!(orbitState && orbitState.disabledPaths && orbitState.disabledPaths.has(path));
 }
 
+/**
+ * Toggle de l'état désactivé d'un slider Orbit.
+ */
 function toggleOrbitSliderDisabled(path) {
   if (!orbitState || !path) return false;
   if (!orbitState.disabledPaths) {
@@ -1184,6 +1317,9 @@ function toggleOrbitSliderDisabled(path) {
   return true;
 }
 
+/**
+ * Branche un ResizeObserver sur le canvas Orbit pour garder un rendu net.
+ */
 function setupOrbitCanvasResize() {
   teardownOrbitCanvasResize();
   if (!orbitCanvas) return;
@@ -1204,6 +1340,9 @@ function setupOrbitCanvasResize() {
   resizeOrbitCanvas();
 }
 
+/**
+ * Débranche le ResizeObserver canvas Orbit.
+ */
 function teardownOrbitCanvasResize() {
   if (orbitResizeObserver) {
     orbitResizeObserver.disconnect();
@@ -1211,6 +1350,9 @@ function teardownOrbitCanvasResize() {
   }
 }
 
+/**
+ * Recalcule la géométrie de rendu Orbit (taille CSS/canvas + scale + offsets).
+ */
 function resizeOrbitCanvas(options = {}) {
   if (!orbitCanvas || !orbitCtx || !orbitBody) return false;
   const keepViewportCenter = !!options.keepViewportCenter;
@@ -1256,6 +1398,9 @@ function resizeOrbitCanvas(options = {}) {
   return true;
 }
 
+/**
+ * Construit l'état Orbit initial à partir des sliders et d'un éventuel état persisté.
+ */
 function initOrbitState(sliders, persisted) {
   if (!orbitCanvas) return;
   const width = Math.max(1, orbitBaseWidth || orbitCanvas.clientWidth || 1);
@@ -1332,6 +1477,9 @@ function initOrbitState(sliders, persisted) {
   constrainOrbitPositions();
 }
 
+/**
+ * Garantit la cohérence des rayons internes/externes du disque Orbit.
+ */
 function ensureOrbitRadii() {
   if (!orbitState) return;
   const maxOuter = Math.max(40, Math.min(orbitState.width, orbitState.height) * 0.47);
@@ -1339,6 +1487,9 @@ function ensureOrbitRadii() {
   orbitState.innerRadius = clamp(orbitState.innerRadius, 8, orbitState.outerRadius - 6);
 }
 
+/**
+ * Branche les interactions pointer sur le canvas Orbit (drag paramètre + pan/zoom).
+ */
 function installOrbitPointerHandlers() {
   if (!orbitCanvas) return;
   orbitCanvas.onpointerdown = (event) => {
@@ -1439,6 +1590,9 @@ function installOrbitPointerHandlers() {
   };
 }
 
+/**
+ * Transforme un event pointer en coordonnées canvas Orbit.
+ */
 function orbitPointerPosition(event) {
   const rect = orbitCanvas.getBoundingClientRect();
   const scale = orbitRenderScale || 1;
@@ -1452,6 +1606,9 @@ function orbitPointerPosition(event) {
   };
 }
 
+/**
+ * Hit-test: détecte le slider Orbit le plus proche d'un point.
+ */
 function hitTestOrbit(x, y) {
   if (!orbitState) return null;
   const iconRadius = 9;
@@ -1473,6 +1630,9 @@ function hitTestOrbit(x, y) {
   return null;
 }
 
+/**
+ * Met à jour le curseur selon le mode d'interaction Orbit.
+ */
 function updateOrbitCursor(mode) {
   if (!orbitCanvas) return;
   if (mode === 'slider') {
@@ -1490,6 +1650,9 @@ function updateOrbitCursor(mode) {
   orbitCanvas.style.cursor = 'default';
 }
 
+/**
+ * Calcule et applique au DSP la valeur d'un slider Orbit à partir de sa position.
+ */
 function applyOrbitValueForPath(path) {
   if (!orbitState) return;
   if (isOrbitSliderDisabled(path)) return;
@@ -1507,6 +1670,9 @@ function applyOrbitValueForPath(path) {
   if (emitRunStateFn) emitRunStateFn();
 }
 
+/**
+ * Ré-applique toutes les valeurs Orbit vers la couche paramétrique partagée.
+ */
 function applyOrbitValuesForAll() {
   if (!orbitState) return;
   for (const slider of orbitState.sliders) {
@@ -1525,6 +1691,9 @@ function applyOrbitValuesForAll() {
   if (emitRunStateFn) emitRunStateFn();
 }
 
+/**
+ * Convertit une position 2D Orbit en valeur de slider.
+ */
 function sliderValueFromPosition(slider, x, y) {
   if (!orbitState) return slider.min;
   const d = Math.hypot(x - orbitState.center.x, y - orbitState.center.y);
@@ -1537,6 +1706,9 @@ function sliderValueFromPosition(slider, x, y) {
   return clamp(value, slider.min, slider.max);
 }
 
+/**
+ * Conversion distance->normalisé dans l'espace radial Orbit.
+ */
 function normalizedFromDistance(distance) {
   if (!orbitState) return 0;
   if (distance <= orbitState.innerRadius) return 1;
@@ -1544,12 +1716,18 @@ function normalizedFromDistance(distance) {
   return (orbitState.outerRadius - distance) / (orbitState.outerRadius - orbitState.innerRadius);
 }
 
+/**
+ * Conversion normalisé->distance dans l'espace radial Orbit.
+ */
 function distanceFromNormalized(u) {
   if (!orbitState) return 0;
   const clamped = clamp(u, 0, 1);
   return orbitState.outerRadius - clamped * (orbitState.outerRadius - orbitState.innerRadius);
 }
 
+/**
+ * Reprojette les `paramValues` courants vers les positions visuelles Orbit.
+ */
 function syncOrbitFromParams() {
   if (!orbitState) return;
   if (orbitPointer) {
@@ -1594,6 +1772,9 @@ function syncOrbitFromParams() {
   return changed;
 }
 
+/**
+ * Déclenche une sync Orbit throttlée depuis les paramètres.
+ */
 function requestOrbitSyncFromParams(force = false) {
   if (!orbitUiInstance) return;
   if (force) {
@@ -1621,6 +1802,9 @@ function requestOrbitSyncFromParams(force = false) {
   }, Math.max(0, ORBIT_PARAM_SYNC_INTERVAL_MS - elapsed));
 }
 
+/**
+ * Rendu immédiat du canvas Orbit.
+ */
 function drawOrbitNow() {
   if (!orbitState || !orbitCtx || !orbitCanvas) return;
   const ctx = orbitCtx;
@@ -1707,12 +1891,18 @@ function drawOrbitNow() {
   }
 }
 
+/**
+ * Version courte des labels Orbit pour garder la lisibilité dans le cercle.
+ */
 function shortOrbitLabel(label) {
   if (!label) return '';
   const max = 16;
   return label.length > max ? `${label.slice(0, max - 1)}…` : label;
 }
 
+/**
+ * Planifie un redraw Orbit au prochain frame.
+ */
 function scheduleOrbitDraw() {
   orbitNeedsDraw = true;
   if (orbitRafId) return;
@@ -1724,6 +1914,9 @@ function scheduleOrbitDraw() {
   });
 }
 
+/**
+ * Contraint les positions Orbit dans la zone valide.
+ */
 function constrainOrbitPositions() {
   if (!orbitState) return;
   for (const slider of orbitState.sliders) {
@@ -1734,6 +1927,9 @@ function constrainOrbitPositions() {
   }
 }
 
+/**
+ * Sérialise l'état Orbit partagé pour backend/remote.
+ */
 function buildRunOrbitSnapshot(includeNonce = true) {
   if (!orbitUiInstance) return null;
   const orbitStateNow = orbitUiInstance.getOrbitState();
@@ -1753,6 +1949,9 @@ function buildRunOrbitSnapshot(includeNonce = true) {
   return snapshot;
 }
 
+/**
+ * Push throttlé de l'état Orbit vers `/api/state`.
+ */
 function sendRunOrbitSnapshot(force = false) {
   const now = Date.now();
   if (!force && now - lastRunOrbitSentAt < 120) return;
@@ -1767,6 +1966,9 @@ function sendRunOrbitSnapshot(force = false) {
   }).catch(() => {});
 }
 
+/**
+ * Applique un état Orbit reçu à distance.
+ */
 function applyRemoteOrbitUi(remoteOrbit) {
   if (!remoteOrbit || typeof remoteOrbit !== 'object') return;
   if (!orbitUiInstance) {
@@ -1778,6 +1980,9 @@ function applyRemoteOrbitUi(remoteOrbit) {
   orbitUiInstance.setOrbitState(merged);
 }
 
+/**
+ * Fusionne un état Orbit de base avec un état remote partiel.
+ */
 function mergeRemoteOrbitState(baseState, remoteOrbit) {
   const next = {
     zoom: Number.isFinite(remoteOrbit.zoom) ? Number(remoteOrbit.zoom) : baseState.zoom,
@@ -1829,6 +2034,9 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+/**
+ * Extrait les paths des boutons Faust (impulsions) pour leur traitement spécifique.
+ */
 function collectButtonPaths(ui) {
   const paths = [];
   if (!Array.isArray(ui)) return paths;
@@ -1848,6 +2056,9 @@ function collectButtonPaths(ui) {
   return paths;
 }
 
+/**
+ * Raccourci clavier `Space` pour trigger le dernier bouton UI actif.
+ */
 function installRunSpaceShortcut() {
   if (runSpaceKeyHandler || runSpaceKeyUpHandler) return;
   runSpaceKeyHandler = async (event) => {
@@ -1867,7 +2078,7 @@ function installRunSpaceShortcut() {
     }
     runSpacePressedPath = targetPath;
     pressedUiButtons.add(targetPath);
-    setParamValue(targetPath, 1, { skipSnapshot: true });
+    setParamValue(targetPath, 1, { skipSnapshot: true, owner: LOCAL_RUN_UI_OWNER });
     sendRunParamsSnapshot(true);
   };
   runSpaceKeyUpHandler = (event) => {
@@ -1877,7 +2088,7 @@ function installRunSpaceShortcut() {
     const path = runSpacePressedPath;
     runSpacePressedPath = null;
     pressedUiButtons.delete(path);
-    setParamValue(path, 0, { skipSnapshot: true });
+    setParamValue(path, 0, { skipSnapshot: true, owner: null });
     sendRunParamsSnapshot(true);
   };
   runSpaceBlurHandler = () => {
@@ -1885,7 +2096,7 @@ function installRunSpaceShortcut() {
     const path = runSpacePressedPath;
     runSpacePressedPath = null;
     pressedUiButtons.delete(path);
-    setParamValue(path, 0, { skipSnapshot: true });
+    setParamValue(path, 0, { skipSnapshot: true, owner: null });
     sendRunParamsSnapshot(true);
   };
   window.addEventListener('keydown', runSpaceKeyHandler);
@@ -1893,6 +2104,9 @@ function installRunSpaceShortcut() {
   window.addEventListener('blur', runSpaceBlurHandler, true);
 }
 
+/**
+ * Supprime le raccourci `Space` et relâche proprement le bouton en cours.
+ */
 function uninstallRunSpaceShortcut() {
   if (runSpaceKeyHandler) {
     window.removeEventListener('keydown', runSpaceKeyHandler);
@@ -1910,11 +2124,14 @@ function uninstallRunSpaceShortcut() {
     const path = runSpacePressedPath;
     runSpacePressedPath = null;
     pressedUiButtons.delete(path);
-    setParamValue(path, 0, { skipSnapshot: true });
+    setParamValue(path, 0, { skipSnapshot: true, owner: null });
     sendRunParamsSnapshot(true);
   }
 }
 
+/**
+ * Relâche les boutons maintenus localement (sauf bouton protégé en cours).
+ */
 function releasePressedUiButtons() {
   if (pressedUiButtons.size === 0) return;
   const protectedPath = runSpacePressedPath;
@@ -1923,7 +2140,7 @@ function releasePressedUiButtons() {
     if (protectedPath && path === protectedPath) {
       continue;
     }
-    setParamValue(path, 0);
+    setParamValue(path, 0, { owner: null });
     releasedAny = true;
   }
   if (protectedPath) {
@@ -1936,6 +2153,9 @@ function releasePressedUiButtons() {
   }
 }
 
+/**
+ * Installe la garde globale pointer/blur pour éviter les boutons "bloqués".
+ */
 function installUiReleaseGuard() {
   if (uiReleaseHandlersInstalled) return;
   const handler = () => releasePressedUiButtons();
@@ -1946,6 +2166,9 @@ function installUiReleaseGuard() {
   uiReleaseHandlersInstalled = true;
 }
 
+/**
+ * Désinstalle la garde globale pointer/blur.
+ */
 function uninstallUiReleaseGuard() {
   if (!uiReleaseHandlersInstalled) return;
   const handler = uiReleaseGuardHandler;
@@ -1958,6 +2181,9 @@ function uninstallUiReleaseGuard() {
   uiReleaseHandlersInstalled = false;
 }
 
+/**
+ * Applique le zoom de l'UI regular.
+ */
 function applyUiZoom() {
   const zoomHost = controlsClassicPane || controlsContent;
   if (!zoomHost || !uiZoomWrap || !uiZoomStage || !currentUiRoot) return;
@@ -1976,6 +2202,9 @@ function applyUiZoom() {
   uiZoomStage.style.height = `${naturalHeight * scale}px`;
 }
 
+/**
+ * Observe les changements de taille de l'UI regular pour recalcul de zoom auto.
+ */
 function setupUiZoomObserver() {
   teardownUiZoomObserver();
   const zoomHost = controlsClassicPane || controlsContent;
@@ -1985,6 +2214,9 @@ function setupUiZoomObserver() {
   uiResizeObserver.observe(currentUiRoot);
 }
 
+/**
+ * Débranche l'observer de zoom de l'UI regular.
+ */
 function teardownUiZoomObserver() {
   if (uiResizeObserver) {
     uiResizeObserver.disconnect();
@@ -1992,6 +2224,9 @@ function teardownUiZoomObserver() {
   }
 }
 
+/**
+ * Ouvre l'accès WebMIDI navigateur et le met en cache.
+ */
 async function ensureMidiAccess() {
   if (!('requestMIDIAccess' in navigator)) {
     midiAccess = null;
@@ -2007,6 +2242,9 @@ async function ensureMidiAccess() {
   }
 }
 
+/**
+ * Rafraîchit la liste des entrées MIDI disponibles.
+ */
 async function refreshMidiInputs(selectEl, preferredValue) {
   selectEl.innerHTML = '';
   const virtualOption = document.createElement('option');
@@ -2042,6 +2280,9 @@ async function refreshMidiInputs(selectEl, preferredValue) {
   }
 }
 
+/**
+ * Sélectionne et branche un périphérique MIDI physique.
+ */
 async function selectMidiDevice(id) {
   const access = await ensureMidiAccess();
   if (!access) return;
@@ -2070,6 +2311,9 @@ async function selectMidiDevice(id) {
   };
 }
 
+/**
+ * Débranche le périphérique MIDI actif.
+ */
 function disconnectMidiDevice() {
   if (midiInput) {
     midiInput.onmidimessage = null;
@@ -2077,6 +2321,9 @@ function disconnectMidiDevice() {
   }
 }
 
+/**
+ * Détecte les paramètres MIDI cibles (gate/freq/key/gain) via heuristiques label/path.
+ */
 function findMidiTargets(ui) {
   if (!Array.isArray(ui)) return null;
   const items = [];
@@ -2115,6 +2362,116 @@ function findMidiTargets(ui) {
   };
 }
 
+function normalizeRunParamCell(path, input, fallbackTs = Date.now()) {
+  // Accept legacy numeric payloads and normalize to full ParamCell.
+  if (!path) return null;
+  if (typeof input === 'number' && Number.isFinite(input)) {
+    return { v: input, d: fallbackTs, owner: null };
+  }
+  if (!input || typeof input !== 'object') return null;
+  const v = Number(input.v);
+  if (!Number.isFinite(v)) return null;
+  const dRaw = Number(input.d);
+  const d = Number.isFinite(dRaw) ? dRaw : fallbackTs;
+  const ownerRaw = input.owner;
+  const owner =
+    ownerRaw === null
+      ? null
+      : typeof ownerRaw === 'string' && ownerRaw.trim()
+        ? ownerRaw.trim()
+        : null;
+  return { v, d, owner };
+}
+
+function normalizeRunParamCells(input, fallbackTs = Date.now()) {
+  // Defensive normalization: invalid paths/cells are ignored.
+  const cells = {};
+  if (!input || typeof input !== 'object') return cells;
+  for (const [path, value] of Object.entries(input)) {
+    const cell = normalizeRunParamCell(path, value, fallbackTs);
+    if (!cell) continue;
+    cells[path] = cell;
+  }
+  return cells;
+}
+
+function cloneParamCells(input) {
+  const output = {};
+  for (const [path, cell] of Object.entries(input || {})) {
+    output[path] = { v: cell.v, d: cell.d, owner: cell.owner ?? null };
+  }
+  return output;
+}
+
+function clampParamValue(path, value) {
+  // Frontend clamp guarantees UI writes respect Faust min/max bounds.
+  if (!Number.isFinite(value)) return value;
+  const meta = paramMetaByPath.get(path);
+  if (!meta) return value;
+  let next = value;
+  if (Number.isFinite(meta.min)) next = Math.max(meta.min, next);
+  if (Number.isFinite(meta.max)) next = Math.min(meta.max, next);
+  return next;
+}
+
+function setParamCell(path, value, options = {}) {
+  // Local LWW register update per parameter:
+  // - stale timestamps are rejected
+  // - stored value is always clamped
+  // - owner is persisted with the same timestamped write
+  const normalizedValue = clampParamValue(path, value);
+  const timestamp =
+    typeof options.timestamp === 'number' && Number.isFinite(options.timestamp)
+      ? options.timestamp
+      : Date.now();
+  const owner =
+    options.owner === null
+      ? null
+      : typeof options.owner === 'string' && options.owner.trim()
+        ? options.owner.trim()
+        : null;
+  const current = paramCells[path];
+  if (current && timestamp < current.d) {
+    return { changed: false, value: current.v };
+  }
+  const sameValue = current && current.v === normalizedValue;
+  const sameOwner = current && (current.owner ?? null) === owner;
+  const sameTimestamp = current && current.d === timestamp;
+  if (sameValue && sameOwner && sameTimestamp) {
+    return { changed: false, value: normalizedValue };
+  }
+  paramCells[path] = {
+    v: normalizedValue,
+    d: timestamp,
+    owner
+  };
+  paramValues[path] = normalizedValue;
+  return { changed: !sameValue || !sameOwner, value: normalizedValue };
+}
+
+function clearLocalOwnerReleaseTimer(path) {
+  const timer = localOwnerReleaseTimers.get(path);
+  if (timer) {
+    clearTimeout(timer);
+    localOwnerReleaseTimers.delete(path);
+  }
+}
+
+function scheduleLocalOwnerRelease(path, delayMs = LOCAL_OWNER_RELEASE_MS) {
+  // Owner is held briefly after interaction updates to absorb dense UI events.
+  // Releasing owner is persisted so other writers can take over deterministically.
+  if (!path) return;
+  clearLocalOwnerReleaseTimer(path);
+  const timer = setTimeout(() => {
+    localOwnerReleaseTimers.delete(path);
+    const current = paramCells[path];
+    if (!current || current.owner !== LOCAL_RUN_UI_OWNER) return;
+    setParamCell(path, current.v, { owner: null, timestamp: Date.now() });
+    sendRunParamsSnapshot(true);
+  }, Math.max(40, Math.round(delayMs)));
+  localOwnerReleaseTimers.set(path, timer);
+}
+
 function setParamValue(path, value, options = {}) {
   if (!path) return;
   const skipSnapshot = options && options.skipSnapshot === true;
@@ -2122,12 +2479,41 @@ function setParamValue(path, value, options = {}) {
   const skipOrbitSync = options && options.skipOrbitSync === true;
   const smooth = options && options.smooth === true;
   const commit = options && options.commit === true;
-  if (paramValues[path] === value) return;
+  const ownerOption =
+    options && Object.prototype.hasOwnProperty.call(options, 'owner')
+      ? options.owner
+      : undefined;
+  const owner =
+    ownerOption === undefined
+      ? undefined
+      : ownerOption === null
+        ? null
+        : String(ownerOption || '');
+  const timestamp =
+    typeof options.timestamp === 'number' && Number.isFinite(options.timestamp)
+      ? options.timestamp
+      : Date.now();
   try {
-    applyParamToDsp(path, value, { smooth, commit });
-    paramValues[path] = value;
+    const current = paramCells[path];
+    // If another owner currently controls this param, local UI cannot steal it directly.
+    const ownerForCell = owner === undefined ? null : owner;
+    if (current && current.owner && current.owner !== LOCAL_RUN_UI_OWNER && ownerForCell === LOCAL_RUN_UI_OWNER) {
+      return;
+    }
+    const nextCell = setParamCell(path, value, {
+      owner: ownerForCell,
+      timestamp
+    });
+    const nextValue = nextCell.value;
+    if (current && current.v === nextValue && (current.owner ?? null) === (ownerForCell ?? null)) {
+      return;
+    }
+    applyParamToDsp(path, nextValue, { smooth, commit });
     if (faustUIInstance) {
-      faustUIInstance.paramChangeByDSP(path, value);
+      faustUIInstance.paramChangeByDSP(path, nextValue);
+    }
+    if (ownerForCell === LOCAL_RUN_UI_OWNER) {
+      scheduleLocalOwnerRelease(path);
     }
     if (!skipSnapshot) {
       sendRunParamsSnapshot();
@@ -2141,79 +2527,22 @@ function setParamValue(path, value, options = {}) {
   }
 }
 
+/**
+ * Écriture DSP effective (sans lissage actuellement).
+ */
 function applyParamToDsp(path, value, options = {}) {
   if (!dspNode) return;
-  const smooth = options && options.smooth === true;
-  const commit = options && options.commit === true;
-  if (!smooth || uiButtonPaths.has(path)) {
-    clearParamSmooth(path);
-    try {
-      dspNode.setParamValue(path, value);
-    } catch {
-      // ignore
-    }
-    return;
-  }
-
-  const now = Date.now();
-  let entry = paramSmooth.get(path);
-  if (!entry) {
-    entry = {
-      lastSentAt: 0,
-      lastSentValue: undefined,
-      pendingValue: undefined,
-      timer: null
-    };
-    paramSmooth.set(path, entry);
-  }
-
-  const sendNow = (targetValue) => {
-    if (!dspNode) return;
-    if (
-      typeof entry.lastSentValue === 'number' &&
-      Math.abs(targetValue - entry.lastSentValue) < PARAM_SMOOTH_EPSILON
-    ) {
-      return;
-    }
-    try {
-      dspNode.setParamValue(path, targetValue);
-      entry.lastSentAt = Date.now();
-      entry.lastSentValue = targetValue;
-    } catch {
-      // ignore
-    }
-  };
-
-  if (commit) {
-    if (entry.timer) {
-      clearTimeout(entry.timer);
-      entry.timer = null;
-    }
-    entry.pendingValue = undefined;
-    sendNow(value);
-    return;
-  }
-
-  const elapsed = now - entry.lastSentAt;
-  if (elapsed >= PARAM_SMOOTH_INTERVAL_MS) {
-    sendNow(value);
-    return;
-  }
-
-  entry.pendingValue = value;
-  if (!entry.timer) {
-    const wait = Math.max(0, PARAM_SMOOTH_INTERVAL_MS - elapsed);
-    entry.timer = setTimeout(() => {
-      entry.timer = null;
-      if (typeof entry.pendingValue === 'number') {
-        const target = entry.pendingValue;
-        entry.pendingValue = undefined;
-        sendNow(target);
-      }
-    }, wait);
+  clearParamSmooth(path);
+  try {
+    dspNode.setParamValue(path, value);
+  } catch {
+    // ignore
   }
 }
 
+/**
+ * Annule un lissage paramètre éventuel.
+ */
 function clearParamSmooth(path) {
   const entry = paramSmooth.get(path);
   if (!entry) return;
@@ -2223,6 +2552,9 @@ function clearParamSmooth(path) {
   paramSmooth.delete(path);
 }
 
+/**
+ * Annule tous les lissages paramètres.
+ */
 function clearAllParamSmoothing() {
   for (const [path, entry] of paramSmooth.entries()) {
     if (entry.timer) {
@@ -2233,21 +2565,40 @@ function clearAllParamSmoothing() {
 }
 
 function applyRemoteRunParams(remoteParams) {
+  // Merge remote cells with local cells, honoring:
+  // 1) local active owner protection,
+  // 2) per-param timestamp freshness,
+  // 3) exact no-op skipping for identical cells.
+  const remoteCells = normalizeRunParamCells(remoteParams, 0);
   let changed = false;
-  for (const [path, value] of Object.entries(remoteParams)) {
-    if (typeof value !== 'number' || Number.isNaN(value)) continue;
+  for (const [path, remoteCell] of Object.entries(remoteCells)) {
     if (uiButtonPaths.has(path) && pressedUiButtons.has(path)) {
       // Keep local hold authoritative while button is actively pressed by user.
       continue;
     }
-    // Runtime remote sync must preserve actual values, including button=1.
-    // Legacy button reset normalization is only for cold restore paths.
-    const normalizedValue = value;
-    if (paramValues[path] === normalizedValue) continue;
+    const localCell = paramCells[path];
+    if (localCell && localCell.owner === LOCAL_RUN_UI_OWNER && remoteCell.owner !== LOCAL_RUN_UI_OWNER) {
+      continue;
+    }
+    if (localCell && remoteCell.d < localCell.d) continue;
+    const normalizedValue = clampParamValue(path, remoteCell.v);
+    if (
+      localCell &&
+      localCell.v === normalizedValue &&
+      localCell.d === remoteCell.d &&
+      (localCell.owner ?? null) === (remoteCell.owner ?? null)
+    ) {
+      continue;
+    }
     try {
       if (dspNode) {
         dspNode.setParamValue(path, normalizedValue);
       }
+      paramCells[path] = {
+        v: normalizedValue,
+        d: remoteCell.d,
+        owner: remoteCell.owner ?? null
+      };
       paramValues[path] = normalizedValue;
       if (faustUIInstance) {
         faustUIInstance.paramChangeByDSP(path, normalizedValue);
@@ -2262,6 +2613,15 @@ function applyRemoteRunParams(remoteParams) {
     if (emitRunStateFn) emitRunStateFn();
     sendRunParamsSnapshot();
   }
+}
+
+function fingerprintRunParams(input) {
+  // Fingerprint includes value + timestamp + owner to detect semantic changes only.
+  const cells = normalizeRunParamCells(input, 0);
+  const entries = Object.entries(cells)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([path, cell]) => `${path}:${Number(cell.v)}:${Number(cell.d)}:${cell.owner || ''}`);
+  return entries.join('|');
 }
 
 function noteOnMidi(note, velocity) {
@@ -2291,6 +2651,9 @@ function noteOnMidi(note, velocity) {
   }
 }
 
+/**
+ * Envoie un note-off MIDI, soit natif DSP, soit via paramètres cibles.
+ */
 function noteOffMidi(note = null) {
   if (dspNode && typeof dspNode.keyOff === 'function') {
     try {
@@ -2313,9 +2676,12 @@ function noteOffMidi(note = null) {
   }
 }
 
+/**
+ * Réapplique toutes les valeurs locales vers DSP + UIs.
+ */
 function applyParamValues() {
-  for (const [path, value] of Object.entries(paramValues)) {
-    const normalizedValue = normalizeRestoredParamValue(path, value);
+  for (const [path, cell] of Object.entries(paramCells)) {
+    const normalizedValue = normalizeRestoredParamValue(path, cell.v);
     try {
       if (dspNode) {
         dspNode.setParamValue(path, normalizedValue);
@@ -2326,6 +2692,9 @@ function applyParamValues() {
       if (paramValues[path] !== normalizedValue) {
         paramValues[path] = normalizedValue;
       }
+      if (paramCells[path] && paramCells[path].v !== normalizedValue) {
+        paramCells[path] = { ...paramCells[path], v: normalizedValue };
+      }
     } catch {
       // ignore
     }
@@ -2333,24 +2702,39 @@ function applyParamValues() {
   requestOrbitSyncFromParams(true);
 }
 
+/**
+ * Normalisation de restauration (ex: un bouton ne doit pas rester latched à 1).
+ */
 function normalizeRestoredParamValue(path, value) {
   // Faust buttons are impulse controls and must not stay latched on restore.
   if (uiButtonPaths.has(path) && value > 0) return 0;
   return value;
 }
 
+/**
+ * Corrige les boutons latched à chaud dans l'état local.
+ */
 function normalizeLatchedButtonParams() {
   let changed = false;
   for (const path of uiButtonPaths) {
     const current = paramValues[path];
     if (typeof current === 'number' && current > 0) {
       paramValues[path] = 0;
+      const cell = paramCells[path];
+      if (cell) {
+        paramCells[path] = { ...cell, v: 0, d: Date.now(), owner: null };
+      } else {
+        paramCells[path] = { v: 0, d: Date.now(), owner: null };
+      }
       changed = true;
     }
   }
   return changed;
 }
 
+/**
+ * Force tous les boutons UI à 0 côté DSP + état partagé.
+ */
 function resetUiButtonsToZero() {
   if (uiButtonPaths.size === 0) return;
   let changed = false;
@@ -2369,6 +2753,7 @@ function resetUiButtonsToZero() {
       // ignore
     }
     paramValues[path] = 0;
+    paramCells[path] = { v: 0, d: Date.now(), owner: null };
   }
   pressedUiButtons.clear();
   if (changed) {
@@ -2376,6 +2761,9 @@ function resetUiButtonsToZero() {
   }
 }
 
+/**
+ * Branche le callback DSP -> UI quand disponible.
+ */
 function attachOutputParamHandler() {
   if (!dspNode || typeof dspNode.setOutputParamHandler !== 'function') return;
   dspNode.setOutputParamHandler((path, value) => {
@@ -2383,9 +2771,15 @@ function attachOutputParamHandler() {
     if (typeof paramValues[path] === 'number' && Math.abs(paramValues[path] - value) < PARAM_SMOOTH_EPSILON) {
       return;
     }
-    paramValues[path] = value;
+    const current = paramCells[path];
+    paramCells[path] = {
+      v: clampParamValue(path, value),
+      d: Date.now(),
+      owner: current?.owner ?? null
+    };
+    paramValues[path] = paramCells[path].v;
     if (faustUIInstance) {
-      faustUIInstance.paramChangeByDSP(path, value);
+      faustUIInstance.paramChangeByDSP(path, paramValues[path]);
     }
     requestOrbitSyncFromParams();
     sendRunParamsSnapshot();
@@ -2395,6 +2789,8 @@ function attachOutputParamHandler() {
 }
 
 function startParamPolling() {
+  // Fallback bridge when DSP output handler is unavailable:
+  // poll DSP values and reflect back into ParamCell state at a fixed cadence.
   if (outputParamHandlerAttached) return;
   if (paramPollId) return;
   if (!dspNode || typeof dspNode.getParamValue !== 'function') return;
@@ -2409,8 +2805,14 @@ function startParamPolling() {
         const value = dspNode.getParamValue(path);
         if (typeof value !== 'number' || Number.isNaN(value)) continue;
         if (typeof paramValues[path] !== 'number' || Math.abs(paramValues[path] - value) >= PARAM_SMOOTH_EPSILON) {
-          paramValues[path] = value;
-          faustUIInstance.paramChangeByDSP(path, value);
+          const current = paramCells[path];
+          paramCells[path] = {
+            v: clampParamValue(path, value),
+            d: Date.now(),
+            owner: current?.owner ?? null
+          };
+          paramValues[path] = paramCells[path].v;
+          faustUIInstance.paramChangeByDSP(path, paramValues[path]);
           changed = true;
         }
       } catch {
@@ -2421,7 +2823,7 @@ function startParamPolling() {
       requestOrbitSyncFromParams();
       if (emitRunStateFn) emitRunStateFn();
     }
-  }, 150);
+  }, 120);
 }
 
 function stopParamPolling() {
@@ -2431,11 +2833,17 @@ function stopParamPolling() {
   }
 }
 
+/**
+ * Met à jour la racine DOM courante de l'UI regular.
+ */
 function updateUiRoot(container) {
   currentUiRoot =
     container.querySelector('.faust-ui-root') || container.firstElementChild || null;
 }
 
+/**
+ * Prépare la structure split regular/orbit du panneau de contrôles.
+ */
 function prepareControlsContainer(container) {
   container.innerHTML = '';
   const bg = document.createElement('div');
@@ -2456,6 +2864,9 @@ function prepareControlsContainer(container) {
   return { bg, content, split, classicPane, orbitPane };
 }
 
+/**
+ * Injecte la feuille de style faust-ui une seule fois.
+ */
 function ensureFaustUiCss() {
   if (document.getElementById('faust-ui-css')) return;
   const link = document.createElement('link');
@@ -2501,6 +2912,9 @@ function sendSpectrumSnapshot(scope, data, meta) {
   }).catch(() => {});
 }
 
+/**
+ * Construit un résumé compact de spectre pour backend/MCP.
+ */
 function buildSpectrumSummary(scope, data, meta) {
   if (!Array.isArray(data) || data.length < 8) return null;
   const sampleRate = Number.isFinite(scope.sampleRate) ? scope.sampleRate : 44100;
@@ -2542,6 +2956,9 @@ function buildSpectrumSummary(scope, data, meta) {
   };
 }
 
+/**
+ * Agrège des bandes logarithmiques dB depuis le spectre FFT.
+ */
 function buildLogBands(data, sampleRate, fmin, fmax, count, floorDb) {
   const bands = [];
   const binCount = data.length;
@@ -2567,6 +2984,9 @@ function buildLogBands(data, sampleRate, fmin, fmax, count, floorDb) {
   return bands;
 }
 
+/**
+ * Détecte les principaux pics spectraux.
+ */
 function detectTopPeaks(data, sampleRate, fmax, floorDb, peaksCount) {
   const binCount = data.length;
   const threshold = floorDb + 10;
@@ -2583,6 +3003,9 @@ function detectTopPeaks(data, sampleRate, fmax, floorDb, peaksCount) {
   return peaks.slice(0, peaksCount);
 }
 
+/**
+ * Estime un Q de pic via largeur à -3 dB.
+ */
 function estimatePeakQ(data, peakIndex, sampleRate) {
   const peakDb = data[peakIndex];
   if (!Number.isFinite(peakDb)) return 0;
@@ -2599,6 +3022,9 @@ function estimatePeakQ(data, peakIndex, sampleRate) {
   return Number((peakHz / bandwidth).toFixed(2));
 }
 
+/**
+ * Calcule des features spectraux globaux (RMS, centroid, rolloff, flatness, crest).
+ */
 function computeSpectrumFeatures(data, sampleRate, fmax, floorDb) {
   const eps = 1e-12;
   const powers = data.map((db) => Math.max(eps, Math.pow(10, ((Number.isFinite(db) ? db : floorDb) / 10))));
@@ -2626,6 +3052,9 @@ function computeSpectrumFeatures(data, sampleRate, fmax, floorDb) {
   };
 }
 
+/**
+ * Mesure des indicateurs de qualité audio temps-réel (clip, DC, click risk).
+ */
 function computeAudioQuality(samples) {
   if (!samples || samples.length < 2) {
     return {
@@ -2684,6 +3113,9 @@ function computeAudioQuality(samples) {
   };
 }
 
+/**
+ * Fréquence de rolloff à 95% de l'énergie.
+ */
 function computeRolloff95(powers, fmax) {
   let total = 0;
   for (const p of powers) total += p;
@@ -2699,6 +3131,9 @@ function computeRolloff95(powers, fmax) {
   return fmax;
 }
 
+/**
+ * Flatness spectrale (moyenne géométrique / arithmétique).
+ */
 function computeFlatness(powers) {
   const eps = 1e-12;
   let sumLog = 0;
@@ -2715,13 +3150,17 @@ function computeFlatness(powers) {
 }
 
 function sendRunParamsSnapshot(force = false) {
+  // Periodically publish the full ParamCell map to backend arbitration.
   const now = Date.now();
   if (!force && now - lastRunParamsSentAt < 150) return;
   lastRunParamsSentAt = now;
   fetch('/api/state', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ runParams: { ...paramValues } })
+    body: JSON.stringify({
+      runParamsUi: LOCAL_RUN_UI_OWNER,
+      runParams: cloneParamCells(paramCells)
+    })
   }).catch(() => {});
 }
 
@@ -2734,17 +3173,23 @@ async function executeLocalTrigger(path, holdMs) {
   if (!audioRunning && typeof outputNode !== 'undefined') {
     startAudioOutput();
   }
-  setParamValue(path, 1);
+  setParamValue(path, 1, { owner: null });
   await sleep(duration);
-  setParamValue(path, 0);
+  setParamValue(path, 0, { owner: null });
   // Ensure remote shared state reflects button release even with throttle.
   sendRunParamsSnapshot(true);
 }
 
+/**
+ * Utilitaire async de temporisation.
+ */
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Restaure l'état UI local (scope, zoom, MIDI source, polyphonie, orbit).
+ */
 function applyRunState(runState, controls) {
   if (!runState) return;
   if (runState.orbitUi && typeof runState.orbitUi === 'object') {
@@ -2800,6 +3245,8 @@ function applyRunState(runState, controls) {
 }
 
 export function dispose() {
+  // Full teardown is required because Run can be re-rendered in place
+  // (for example on live session refresh) without an explicit view switch.
   uninstallRunSpaceShortcut();
   detachComputerMidiKeyboard();
   releasePressedUiButtons();
@@ -2815,6 +3262,9 @@ export function dispose() {
   midiSource = 'virtual';
   midiInput = null;
   uiParamPaths = [];
+  paramValues = {};
+  paramCells = {};
+  paramMetaByPath = new Map();
   uiButtonPaths = new Set();
   uiButtonOrder = [];
   lastUiButtonPath = null;
@@ -2829,6 +3279,7 @@ export function dispose() {
     orbitUiInstance.destroy();
     orbitUiInstance = null;
   }
+  teardownOrbitPaneResizeObserver();
   uiZoomWrap = null;
   uiZoomStage = null;
   teardownUiZoomObserver();
@@ -2859,10 +3310,15 @@ export function dispose() {
     remoteSyncTimer = null;
   }
   lastAppliedTriggerNonce = 0;
+  lastAppliedRemoteRunParamsFingerprint = '';
   lastAppliedRemoteOrbitNonce = 0;
   pendingOrbitUi = null;
   lastSpectrumSummary = null;
   clearAllParamSmoothing();
+  for (const timer of localOwnerReleaseTimers.values()) {
+    clearTimeout(timer);
+  }
+  localOwnerReleaseTimers.clear();
 }
 
 function cleanupAudio() {
@@ -2902,6 +3358,9 @@ function cleanupAudio() {
   clearAllParamSmoothing();
 }
 
+/**
+ * Crée l'état interne de l'oscilloscope/spectre.
+ */
 function createScopeState(canvas) {
   const ctx = canvas.getContext('2d');
   resizeCanvasToDisplaySize(canvas, ctx);
@@ -2923,6 +3382,9 @@ function createScopeState(canvas) {
   };
 }
 
+/**
+ * Configure les nœuds d'analyse et la boucle de rendu scope.
+ */
 function setupScope(context, node, scope) {
   resizeCanvasToDisplaySize(scope.canvas, scope.ctx);
   analyserNode = context.createAnalyser();
@@ -2965,6 +3427,9 @@ function setupScope(context, node, scope) {
   return gain;
 }
 
+/**
+ * Démarre la chaîne de sortie audio (avec fade-in court).
+ */
 function startAudioOutput() {
   if (!audioContext || !outputNode) return;
   if (audioRunning) return;
@@ -2976,6 +3441,9 @@ function startAudioOutput() {
   }
 }
 
+/**
+ * Arrête proprement la sortie audio (fade-out court).
+ */
 function stopAudioOutput() {
   if (!outputNode) return;
   try {
@@ -2986,6 +3454,9 @@ function stopAudioOutput() {
   audioRunning = false;
 }
 
+/**
+ * Garantit qu'un AudioContext est en état `running`.
+ */
 async function resumeAudioContext() {
   if (!audioContext) return;
   if (audioContext.state === 'suspended') {
@@ -2998,6 +3469,9 @@ async function resumeAudioContext() {
   }
 }
 
+/**
+ * Trouve une fenêtre alignée trigger pour l'oscilloscope.
+ */
 function findTriggeredWindow(buffer, scope) {
   const threshold = scope.threshold;
   const slope = scope.slope;
@@ -3021,6 +3495,9 @@ function findTriggeredWindow(buffer, scope) {
   return null;
 }
 
+/**
+ * Extrait une fenêtre de taille fixe depuis un buffer audio.
+ */
 function extractWindow(buffer, start, size) {
   const out = new Float32Array(size);
   for (let i = 0; i < size; i++) {
@@ -3029,6 +3506,9 @@ function extractWindow(buffer, start, size) {
   return out;
 }
 
+/**
+ * Rend l'oscilloscope temporel.
+ */
 function drawScope(scope, data) {
   resizeCanvasToDisplaySize(scope.canvas, scope.ctx);
   const { ctx, canvas } = scope;
@@ -3060,6 +3540,9 @@ function drawScope(scope, data) {
   ctx.stroke();
 }
 
+/**
+ * Dessine la grille de fond de l'oscilloscope.
+ */
 function drawScopeGrid(ctx, width, height) {
   const major = 4;
   const minor = 5;
@@ -3109,6 +3592,9 @@ function drawScopeGrid(ctx, width, height) {
   ctx.restore();
 }
 
+/**
+ * Rend le spectre fréquentiel.
+ */
 function drawSpectrum(scope, data) {
   resizeCanvasToDisplaySize(scope.canvas, scope.ctx);
   const { ctx, canvas } = scope;
@@ -3186,6 +3672,9 @@ function drawSpectrum(scope, data) {
   drawFreqAxis(ctx, innerWidth, innerHeight, fmin, fmax, scope.spectrumScale);
 }
 
+/**
+ * Dessine l'axe fréquentiel selon l'échelle (log/lin).
+ */
 function drawFreqAxis(ctx, width, height, fmin, fmax, scale) {
   ctx.save();
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
@@ -3216,6 +3705,9 @@ function drawFreqAxis(ctx, width, height, fmin, fmax, scale) {
   ctx.restore();
 }
 
+/**
+ * Dessine la grille de fond du spectre.
+ */
 function drawSpectrumGrid(ctx, width, height, scope) {
   const linear = scope.spectrumScale === 'linear';
   const fmin = linear ? 0 : 20;
@@ -3279,10 +3771,16 @@ function drawSpectrumGrid(ctx, width, height, scope) {
   }
 }
 
+/**
+ * Retourne la taille logique d'un canvas.
+ */
 function getCanvasSize(canvas) {
   return { width: canvas.clientWidth, height: canvas.clientHeight };
 }
 
+/**
+ * Ajuste la résolution backing-store du canvas à sa taille affichée.
+ */
 function resizeCanvasToDisplaySize(canvas, ctx) {
   const rect = canvas.getBoundingClientRect();
   const width = Math.round(rect.width);

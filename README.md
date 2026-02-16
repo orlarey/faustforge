@@ -5,7 +5,7 @@ Docker-first web UI + MCP server for Faust prototyping, featuring an Orbit UI fo
 
 Prerequisite: Docker installed and running.
 
-### 1) Run the container
+### 1) Run the container (standard mode)
 
 ```bash
 docker run -d \
@@ -33,6 +33,35 @@ Notes:
 - `/var/run/docker.sock` is required because the app launches the Faust Docker image for C++ compilation.
 - `HOST_SESSIONS_DIR` must point to the host path of sessions so nested Docker mounts resolve correctly.
 
+### 2) Run the container (live workspace mode)
+
+Use this mode if you want:
+- automatic recompilation when `.dsp` files change on disk
+
+```bash
+docker run -d \
+  --name faustforge \
+  -p 3000:3000 \
+  -v "$HOME/.faustforge/sessions:/app/sessions" \
+  -v "$HOME/dev/faust:/workspace" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e SESSIONS_DIR=/app/sessions \
+  -e HOST_SESSIONS_DIR="$HOME/.faustforge/sessions" \
+  -e FAUST_HTTP_URL=http://localhost:3000 \
+  -e LIVE_AUTO_DISCOVER=1 \
+  -e LIVE_WORKSPACE_ROOT=/workspace \
+  -e LIVE_SCAN_INTERVAL_MS=1500 \
+  ghcr.io/orlarey/faustforge:latest
+```
+
+Then open:
+
+```text
+http://localhost:3000
+```
+
+In this setup, `.dsp` files under the mounted workspace are discovered automatically.
+
 Optional overrides:
 
 ```bash
@@ -47,7 +76,7 @@ docker run -d \
   ghcr.io/orlarey/faustforge:latest
 ```
 
-### Windows (PowerShell)
+### 3) Windows (PowerShell, standard mode)
 
 ```powershell
 $sessions = "$env:USERPROFILE\.faustforge\sessions"
@@ -205,11 +234,35 @@ The helper script uses:
 - `PORT` (default `3000`)
 - `NAME` (default `faustforge`)
 - `HOST_SESSIONS_DIR` (default `$HOME/.faustforge/sessions`)
+- `LIVE_AUTO_DISCOVER` (optional, default `1`, set `0` to disable workspace auto-discovery)
+- `LIVE_WORKSPACE_ROOT` (optional, default `/workspace`)
+- `LIVE_SCAN_INTERVAL_MS` (optional, default `1500`)
+- `LIVE_IGNORE_DIRS` (optional CSV list, example: `.git,node_modules,build`)
 
 You can still use the raw scripts directly:
 - `./scripts/rebuild.sh`
 - `./scripts/run.sh`
 - `./scripts/stop.sh`
+
+### Optional: Live workspace mode in Docker
+
+To auto-create/update live sessions from files saved in a mounted workspace:
+
+```bash
+docker run -d \
+  --name faustforge \
+  -p 3000:3000 \
+  -v "$HOME/.faustforge/sessions:/app/sessions" \
+  -v "$HOME/dev/faust:/workspace" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e SESSIONS_DIR=/app/sessions \
+  -e HOST_SESSIONS_DIR="$HOME/.faustforge/sessions" \
+  -e FAUST_HTTP_URL=http://localhost:3000 \
+  -e LIVE_AUTO_DISCOVER=1 \
+  -e LIVE_WORKSPACE_ROOT=/workspace \
+  -e LIVE_SCAN_INTERVAL_MS=1500 \
+  faustforge:latest
+```
 
 ## Claude Desktop MCP Setup
 

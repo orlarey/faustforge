@@ -6,19 +6,41 @@ NAME="${NAME:-faustforge}"
 PORT="${PORT:-3000}"
 HOST_SESSIONS_DIR="${HOST_SESSIONS_DIR:-$HOME/.faustforge/sessions}"
 FAUST_HTTP_URL="${FAUST_HTTP_URL:-http://localhost:${PORT}}"
+LIVE_AUTO_DISCOVER="${LIVE_AUTO_DISCOVER:-1}"
+HOST_WORKSPACE_DIR="${HOST_WORKSPACE_DIR:-$HOME/faust-workspace}"
+LIVE_WORKSPACE_ROOT="${LIVE_WORKSPACE_ROOT:-/workspace}"
+LIVE_SCAN_INTERVAL_MS="${LIVE_SCAN_INTERVAL_MS:-1500}"
+LIVE_IGNORE_DIRS="${LIVE_IGNORE_DIRS:-}"
 
 mkdir -p "${HOST_SESSIONS_DIR}"
+mkdir -p "${HOST_WORKSPACE_DIR}"
 
 docker rm -f "${NAME}" >/dev/null 2>&1 || true
 
-docker run -d \
-  --name "${NAME}" \
-  -p "${PORT}:3000" \
-  -v "${HOST_SESSIONS_DIR}:/app/sessions" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e SESSIONS_DIR=/app/sessions \
-  -e HOST_SESSIONS_DIR="${HOST_SESSIONS_DIR}" \
-  -e FAUST_HTTP_URL="${FAUST_HTTP_URL}" \
+RUN_ARGS=(
+  -d
+  --name "${NAME}"
+  -p "${PORT}:3000"
+  -v "${HOST_SESSIONS_DIR}:/app/sessions"
+  -v "${HOST_WORKSPACE_DIR}:${LIVE_WORKSPACE_ROOT}"
+  -v /var/run/docker.sock:/var/run/docker.sock
+  -e SESSIONS_DIR=/app/sessions
+  -e HOST_SESSIONS_DIR="${HOST_SESSIONS_DIR}"
+  -e FAUST_HTTP_URL="${FAUST_HTTP_URL}"
+  -e LIVE_WORKSPACE_ROOT="${LIVE_WORKSPACE_ROOT}"
+)
+
+if [[ "${LIVE_AUTO_DISCOVER}" == "1" ]]; then
+  RUN_ARGS+=(
+    -e LIVE_AUTO_DISCOVER=1
+    -e LIVE_SCAN_INTERVAL_MS="${LIVE_SCAN_INTERVAL_MS}"
+  )
+  if [[ -n "${LIVE_IGNORE_DIRS}" ]]; then
+    RUN_ARGS+=(-e LIVE_IGNORE_DIRS="${LIVE_IGNORE_DIRS}")
+  fi
+fi
+
+docker run "${RUN_ARGS[@]}" \
   "${IMAGE}"
 
 echo "Container '${NAME}' started on http://localhost:${PORT}"

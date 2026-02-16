@@ -3,7 +3,7 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { SessionManager } from '../sessions';
-import { StateStore, View, AppState } from '../state';
+import { StateStore, View, AppState, RunParamCell } from '../state';
 import {
   analyzeFaust,
   compileFaustWasm,
@@ -16,6 +16,109 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   const router = Router();
   const sessionsBaseDir = process.env.SESSIONS_DIR || '/app/sessions';
   const appVersion = readAppVersion();
+  // Canonical in-memory shape for run parameter synchronization.
+  // Every parameter is represented as a timestamped cell.
+  type RunParamMap = Record<string, RunParamCell>;
+
+  function toFiniteNumber(input: unknown): number | null {
+    if (typeof input !== 'number' || !Number.isFinite(input)) return null;
+    return input;
+  }
+
+  function normalizeOwner(input: unknown): string | null | undefined {
+    if (input === undefined) return undefined;
+    if (input === null) return null;
+    if (typeof input !== 'string') return undefined;
+    const trimmed = input.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  function normalizeRunParamCell(input: unknown, fallbackTs: number): RunParamCell | null {
+    // Backward compatibility: accept legacy numeric payloads and upgrade to cells.
+    if (typeof input === 'number' && Number.isFinite(input)) {
+      return { v: input, d: fallbackTs, owner: null };
+    }
+    if (!input || typeof input !== 'object') return null;
+    const obj = input as { v?: unknown; d?: unknown; owner?: unknown };
+    const value = toFiniteNumber(obj.v);
+    if (value === null) return null;
+    const d = toFiniteNumber(obj.d);
+    const owner = normalizeOwner(obj.owner);
+    return {
+      v: value,
+      d: d === null ? fallbackTs : d,
+      owner: owner === undefined ? null : owner
+    };
+  }
+
+  function normalizeRunParamMap(input: unknown, fallbackTs: number): RunParamMap {
+    // Defensive normalization: malformed entries are dropped, never partially trusted.
+    const map: RunParamMap = {};
+    if (!input || typeof input !== 'object') return map;
+    for (const [path, rawCell] of Object.entries(input as Record<string, unknown>)) {
+      if (!path) continue;
+      const cell = normalizeRunParamCell(rawCell, fallbackTs);
+      if (!cell) continue;
+      map[path] = cell;
+    }
+    return map;
+  }
+
+  function getRunParamMap(state: AppState): RunParamMap {
+    return normalizeRunParamMap(state.runParams || {}, 0);
+  }
+
+  function toRunParamValues(params: RunParamMap): Record<string, number> {
+    const values: Record<string, number> = {};
+    for (const [path, cell] of Object.entries(params)) {
+      values[path] = cell.v;
+    }
+    return values;
+  }
+
+  function mergeRunParamMaps(current: RunParamMap, incoming: RunParamMap, writer: string | null): RunParamMap {
+    // Per-param arbitration rules:
+    // 1) lock ownership: writer must own lock (or lock must be free),
+    // 2) freshness: incoming timestamp must be >= current timestamp,
+    // 3) lock transitions are explicit via incoming `owner`.
+    const merged: RunParamMap = { ...current };
+    for (const [path, incomingCell] of Object.entries(incoming)) {
+      const existing = merged[path];
+      if (!existing) {
+        merged[path] = {
+          v: incomingCell.v,
+          d: incomingCell.d,
+          owner: incomingCell.owner ?? null
+        };
+        continue;
+      }
+      const existingOwner = normalizeOwner(existing.owner) ?? null;
+      const writerOwnsLock = !!writer && existingOwner === writer;
+      if (existingOwner && !writerOwnsLock) {
+        continue;
+      }
+      if (incomingCell.d < existing.d) {
+        continue;
+      }
+
+      let nextOwner = existingOwner;
+      const requestedOwner = normalizeOwner(incomingCell.owner);
+      if (requestedOwner !== undefined) {
+        if (requestedOwner === null) {
+          nextOwner = writerOwnsLock || !existingOwner ? null : existingOwner;
+        } else if (!existingOwner || writerOwnsLock || existingOwner === requestedOwner) {
+          nextOwner = requestedOwner;
+        }
+      }
+
+      merged[path] = {
+        v: incomingCell.v,
+        d: incomingCell.d,
+        owner: nextOwner
+      };
+    }
+    return merged;
+  }
 
   function clearSessionArtifacts(sessionPath: string): void {
     const targets = ['generated.cpp', 'signals.dot', 'tasks.dot', 'svg', 'wasm', 'webapp'];
@@ -257,13 +360,70 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
    * GET /sessions
    * Liste les sessions par ordre de création
    * Query: ?limit=number
-   * Response: { sessions: Array<{ sha1, filename, compilation_time }> }
+   * Response: { sessions: Array<{ sha1, kind, filename, compilation_time }> }
    */
   router.get('/sessions', (req: Request, res: Response) => {
     const limitParam = req.query.limit;
     const limit = typeof limitParam === 'string' ? parseInt(limitParam, 10) : undefined;
     const sessions = sessionManager.listSessionsByCreation(limit);
     res.json({ sessions });
+  });
+
+  /**
+   * POST /live/open
+   * Ouvre (ou met à jour) une session live à partir d'un fichier .dsp local.
+   * Body: { filePath: string }
+   */
+  router.post('/live/open', async (req: Request, res: Response) => {
+    const { filePath } = req.body || {};
+    if (!filePath || typeof filePath !== 'string') {
+      res.status(400).json({ error: 'Missing or invalid filePath' });
+      return;
+    }
+    try {
+      const session = sessionManager.createOrUpdateLiveSessionFromFile(filePath);
+      const result = await analyzeFaust(session.path, session.filename);
+      res.json({ sha1: session.sha1, kind: 'live', filename: session.filename, errors: result.errors });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to open live session';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  /**
+   * POST /:sha/live/refresh
+   * Rafraîchit une session live depuis son fichier source.
+   */
+  router.post('/:sha/live/refresh', async (req: Request, res: Response) => {
+    const { sha } = req.params;
+    try {
+      const refreshed = sessionManager.refreshLiveSession(sha);
+      if (!refreshed.session) {
+        res.status(404).json({ error: 'Live session not found or not refreshable' });
+        return;
+      }
+      if (!refreshed.changed) {
+        res.json({
+          sha1: refreshed.session.sha1,
+          kind: 'live',
+          changed: false,
+          contentSha1: refreshed.contentSha1,
+          errors: sessionManager.getErrors(sha)
+        });
+        return;
+      }
+      const result = await analyzeFaust(refreshed.session.path, refreshed.session.filename);
+      res.json({
+        sha1: refreshed.session.sha1,
+        kind: 'live',
+        changed: true,
+        contentSha1: refreshed.contentSha1,
+        errors: result.errors
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to refresh live session';
+      res.status(500).json({ error: message });
+    }
   });
 
   /**
@@ -301,7 +461,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   /**
    * POST /state
    * Met à jour l'état courant (session + vue)
-   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runParams?: any, runTransport?: any, runTrigger?: any, runPolyphony?: number, runMidi?: any, runOrbitUi?: any, spectrum?: any, spectrumSummary?: any }
+   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runParams?: any, runParamsUi?: string|null, runTransport?: any, runTrigger?: any, runPolyphony?: number, runMidi?: any, runOrbitUi?: any, spectrum?: any, spectrumSummary?: any }
    */
   router.post('/state', (req: Request, res: Response) => {
     const {
@@ -310,6 +470,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       audioUnlocked,
       ui,
       runParams,
+      runParamsUi,
       runTransport,
       runTrigger,
       runPolyphony,
@@ -326,7 +487,6 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       audioUnlocked?: boolean;
       ui?: unknown;
       runParams?: AppState['runParams'];
-      runParamsUpdatedAt?: number;
       runTransport?: AppState['runTransport'];
       runTrigger?: AppState['runTrigger'];
       runPolyphony?: number;
@@ -360,8 +520,12 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       partial.ui = ui;
     }
     if (runParams !== undefined) {
-      partial.runParams = runParams as AppState['runParams'];
-      partial.runParamsUpdatedAt = Date.now();
+      const now = Date.now();
+      const writer = normalizeOwner(runParamsUi) ?? null;
+      const currentParams = getRunParamMap(stateStore.read());
+      const incomingParams = normalizeRunParamMap(runParams, now);
+      // Merge instead of blind overwrite so concurrent writers remain deterministic.
+      partial.runParams = mergeRunParamMaps(currentParams, incomingParams, writer);
     }
     if (runTransport !== undefined) {
       partial.runTransport = runTransport as AppState['runTransport'];
@@ -441,13 +605,16 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       res.status(400).json({ error: 'No active session' });
       return;
     }
-    res.json({ sha1: state.sha1, params: state.runParams || {} });
+    const cells = getRunParamMap(state);
+    // `params` is the compatibility view (numeric values only).
+    // `cells` is the canonical synchronization view used by newer clients.
+    res.json({ sha1: state.sha1, params: toRunParamValues(cells), cells });
   });
 
   /**
    * POST /run/param
    * Met à jour un paramètre run par path
-   * Body: { path: string, value: number }
+   * Body: { path: string, value: number, uiId?: string|null, owner?: string|null, d?: number }
    */
   router.post('/run/param', (req: Request, res: Response) => {
     const state = stateStore.read();
@@ -464,9 +631,27 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       res.status(400).json({ error: 'Missing or invalid value' });
       return;
     }
-    const nextParams = { ...(state.runParams || {}), [paramPath]: value };
-    const next = stateStore.update({ runParams: nextParams, runParamsUpdatedAt: Date.now() });
-    res.json({ sha1: next.sha1, path: paramPath, value, params: next.runParams || {} });
+    const now = Date.now();
+    const writer = normalizeOwner(req.body?.uiId) ?? 'ui:mcp';
+    const requestedOwner = normalizeOwner(req.body?.owner);
+    const requestedTs = toFiniteNumber(req.body?.d);
+    const incomingCell: RunParamCell = {
+      v: value,
+      d: requestedTs === null ? now : requestedTs,
+      owner: requestedOwner === undefined ? null : requestedOwner
+    };
+    const currentParams = getRunParamMap(state);
+    const nextParams = mergeRunParamMaps(currentParams, { [paramPath]: incomingCell }, writer);
+    const applied = nextParams[paramPath] || currentParams[paramPath] || { v: value, d: now, owner: null };
+    const next = stateStore.update({ runParams: nextParams });
+    res.json({
+      sha1: next.sha1,
+      path: paramPath,
+      value: applied.v,
+      cell: applied,
+      params: toRunParamValues(nextParams),
+      cells: nextParams
+    });
   });
 
   /**

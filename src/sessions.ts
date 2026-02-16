@@ -4,6 +4,10 @@ import * as path from 'path';
 
 export interface SessionMeta {
   sha1: string;
+  kind?: 'static' | 'live';
+  source_path?: string;
+  source_mtime_ms?: number;
+  content_sha1?: string;
   filename: string;
   compilation_time: number;
 }
@@ -16,8 +20,12 @@ export interface Session {
 
 export interface SessionSummary {
   sha1: string;
+  kind: 'static' | 'live';
   filename: string;
   compilation_time: number;
+  source_path?: string;
+  source_mtime_ms?: number;
+  content_sha1?: string;
 }
 
 /**
@@ -50,12 +58,18 @@ export class SessionManager {
       const entries = fs.readdirSync(this.sessionsDir, { withFileTypes: true });
       const summaries: SessionSummary[] = [];
       for (const entry of entries) {
-        if (entry.isDirectory() && this.isValidSha1(entry.name)) {
+        if (entry.isDirectory() && this.isValidSessionId(entry.name)) {
           const metadataPath = path.join(this.sessionsDir, entry.name, 'metadata.json');
           try {
             const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+            const kind: 'static' | 'live' = metadata.kind === 'live' ? 'live' : 'static';
+            const id = typeof metadata.sha1 === 'string' && metadata.sha1 ? metadata.sha1 : entry.name;
+            if (!this.isValidSessionId(id)) {
+              continue;
+            }
             summaries.push({
-              sha1: metadata.sha1,
+              sha1: id,
+              kind,
               filename: metadata.filename,
               compilation_time: metadata.compilation_time
             });
@@ -85,6 +99,14 @@ export class SessionManager {
    */
   private isValidSha1(str: string): boolean {
     return /^[0-9a-f]{40}$/.test(str);
+  }
+
+  private isValidLiveId(str: string): boolean {
+    return /^live-[0-9a-f]{40}$/.test(str);
+  }
+
+  private isValidSessionId(str: string): boolean {
+    return this.isValidSha1(str) || this.isValidLiveId(str);
   }
 
   /**
@@ -169,6 +191,7 @@ export class SessionManager {
     // Créer metadata.json
     const metadata: SessionMeta = {
       sha1,
+      kind: 'static',
       filename,
       compilation_time: Date.now()
     };
@@ -185,6 +208,189 @@ export class SessionManager {
     this.evict();
 
     return { sha1, filename, path: sessionPath };
+  }
+
+  /**
+   * Crée (ou met à jour) une session live à partir d'un fichier local.
+   * L'ID live est stable et dérivé du chemin canonique du fichier.
+   */
+  createOrUpdateLiveSessionFromFile(filePath: string): Session {
+    if (!filePath || typeof filePath !== 'string') {
+      throw new Error('Invalid file path');
+    }
+    const resolvedPath = path.resolve(filePath);
+    if (!resolvedPath.endsWith('.dsp')) {
+      throw new Error('File must end with .dsp');
+    }
+    if (!fs.existsSync(resolvedPath)) {
+      throw new Error('File not found');
+    }
+    const sourceStats = fs.statSync(resolvedPath);
+    const code = fs.readFileSync(resolvedPath, 'utf8');
+    const filename = path.basename(resolvedPath);
+    const sourceSha = this.computeSha1(code);
+    const liveId = `live-${this.computeSha1(resolvedPath)}`;
+    const sessionPath = path.join(this.sessionsDir, liveId);
+    const sourcecodePath = path.join(sessionPath, 'sourcecode');
+    const metadataPath = path.join(sessionPath, 'metadata.json');
+
+    let existingCompilationTime: number | null = null;
+    if (fs.existsSync(metadataPath)) {
+      try {
+        const prev: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        if (typeof prev.compilation_time === 'number' && Number.isFinite(prev.compilation_time)) {
+          existingCompilationTime = prev.compilation_time;
+        }
+      } catch {
+        // ignore malformed previous metadata
+      }
+    }
+
+    fs.mkdirSync(sourcecodePath, { recursive: true });
+    fs.writeFileSync(path.join(sourcecodePath, filename), code, 'utf8');
+    fs.writeFileSync(path.join(sessionPath, 'user_code.dsp'), code, 'utf8');
+    if (!fs.existsSync(path.join(sessionPath, 'errors.log'))) {
+      fs.writeFileSync(path.join(sessionPath, 'errors.log'), '', 'utf8');
+    }
+
+    const metadata: SessionMeta = {
+      sha1: liveId,
+      kind: 'live',
+      source_path: resolvedPath,
+      source_mtime_ms: sourceStats.mtimeMs,
+      content_sha1: sourceSha,
+      filename,
+      compilation_time: existingCompilationTime ?? Date.now()
+    };
+    fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+
+    if (!this.creationOrder.includes(liveId)) {
+      this.creationOrder.push(liveId);
+    }
+    this.touch(liveId);
+    this.evict();
+
+    return { sha1: liveId, filename, path: sessionPath };
+  }
+
+  /**
+   * Assure l'existence d'une session live pour un fichier donné et indique
+   * si le contenu a changé depuis la dernière version connue.
+   */
+  ensureLiveSessionFromFile(filePath: string): { changed: boolean; isNew: boolean; session: Session } {
+    if (!filePath || typeof filePath !== 'string') {
+      throw new Error('Invalid file path');
+    }
+    const resolvedPath = path.resolve(filePath);
+    if (!resolvedPath.endsWith('.dsp')) {
+      throw new Error('File must end with .dsp');
+    }
+    if (!fs.existsSync(resolvedPath)) {
+      throw new Error('File not found');
+    }
+
+    const liveId = `live-${this.computeSha1(resolvedPath)}`;
+    const metadataPath = path.join(this.sessionsDir, liveId, 'metadata.json');
+    const existed = fs.existsSync(metadataPath);
+    const currentMtimeMs = fs.statSync(resolvedPath).mtimeMs;
+
+    if (existed) {
+      try {
+        const prev: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        if (
+          prev.kind === 'live' &&
+          typeof prev.source_mtime_ms === 'number' &&
+          Number.isFinite(prev.source_mtime_ms) &&
+          prev.source_mtime_ms === currentMtimeMs
+        ) {
+          const existing = this.getSession(liveId);
+          if (existing) {
+            return {
+              changed: false,
+              isNew: false,
+              session: existing
+            };
+          }
+        }
+      } catch {
+        // ignore malformed metadata
+      }
+    }
+
+    const session = this.createOrUpdateLiveSessionFromFile(resolvedPath);
+    return {
+      changed: true,
+      isNew: !existed,
+      session
+    };
+  }
+
+  /**
+   * Liste les sessions live connues depuis le scan disque courant.
+   */
+  listLiveSessions(limit?: number): SessionSummary[] {
+    this.refreshSessions();
+    const out: SessionSummary[] = [];
+    for (const id of this.creationOrder) {
+      const metadataPath = path.join(this.sessionsDir, id, 'metadata.json');
+      try {
+        const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        if (metadata.kind !== 'live') continue;
+        out.push({
+          sha1: id,
+          kind: 'live',
+          filename: metadata.filename,
+          compilation_time: metadata.compilation_time,
+          source_path: metadata.source_path,
+          source_mtime_ms: metadata.source_mtime_ms,
+          content_sha1: metadata.content_sha1
+        });
+      } catch {
+        // ignore invalid entries
+      }
+    }
+    if (limit && limit > 0) return out.slice(-limit);
+    return out;
+  }
+
+  /**
+   * Rafraîchit une session live depuis son fichier source si le contenu a changé.
+   */
+  refreshLiveSession(liveId: string): { changed: boolean; session: Session | null; contentSha1?: string } {
+    if (!this.isValidLiveId(liveId) || !this.exists(liveId)) {
+      return { changed: false, session: null };
+    }
+    const metadataPath = path.join(this.sessionsDir, liveId, 'metadata.json');
+    try {
+      const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      if (metadata.kind !== 'live' || !metadata.source_path) {
+        return { changed: false, session: null };
+      }
+      if (!fs.existsSync(metadata.source_path)) {
+        return { changed: false, session: null };
+      }
+      const sourceMtimeMs = fs.statSync(metadata.source_path).mtimeMs;
+      if (
+        typeof metadata.source_mtime_ms === 'number' &&
+        Number.isFinite(metadata.source_mtime_ms) &&
+        metadata.source_mtime_ms === sourceMtimeMs
+      ) {
+        const session = this.getSession(liveId);
+        return { changed: false, session, contentSha1: metadata.content_sha1 };
+      }
+      const code = fs.readFileSync(metadata.source_path, 'utf8');
+      const contentSha1 = this.computeSha1(code);
+      if (metadata.content_sha1 === contentSha1) {
+        metadata.source_mtime_ms = sourceMtimeMs;
+        fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+        const session = this.getSession(liveId);
+        return { changed: false, session, contentSha1 };
+      }
+      const session = this.createOrUpdateLiveSessionFromFile(metadata.source_path);
+      return { changed: true, session, contentSha1 };
+    } catch {
+      return { changed: false, session: null };
+    }
   }
 
   /**
@@ -273,8 +479,12 @@ export class SessionManager {
         const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
         summaries.push({
           sha1: metadata.sha1,
+          kind: metadata.kind === 'live' ? 'live' : 'static',
           filename: metadata.filename,
-          compilation_time: metadata.compilation_time
+          compilation_time: metadata.compilation_time,
+          source_path: metadata.source_path,
+          source_mtime_ms: metadata.source_mtime_ms,
+          content_sha1: metadata.content_sha1
         });
       } catch {
         // Ignorer

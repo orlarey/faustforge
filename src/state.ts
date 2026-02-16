@@ -58,7 +58,7 @@ export interface AppState {
   view: View;
   audioUnlocked?: boolean;
   ui?: unknown;
-  runParams?: Record<string, number>;
+  runParams?: Record<string, RunParamCell | number>;
   runParamsUpdatedAt?: number;
   runTransport?: {
     action: 'start' | 'stop' | 'toggle';
@@ -96,6 +96,12 @@ export interface AppState {
   };
   spectrumSummary?: SpectrumSummary;
   updatedAt: number;
+}
+
+export interface RunParamCell {
+  v: number;
+  d: number;
+  owner?: string | null;
 }
 
 export class StateStore {

@@ -3,6 +3,7 @@ import * as path from 'path';
 import { SessionManager } from './sessions';
 import { createApiRouter } from './routes/api';
 import { StateStore } from './state';
+import { LiveWorkspaceSync, readLiveWorkspaceConfigFromEnv } from './live-workspace';
 
 export interface ServerConfig {
   port: number;
@@ -29,6 +30,11 @@ export function createServer(config: ServerConfig): Application {
   // Monter les routes API
   const apiRouter = createApiRouter(sessionManager, stateStore);
   app.use('/api', apiRouter);
+
+  // Optionnel: découverte auto des sessions live dans un workspace monté.
+  const liveConfig = readLiveWorkspaceConfigFromEnv();
+  const liveSync = new LiveWorkspaceSync(sessionManager, stateStore, liveConfig);
+  liveSync.start();
 
   // Servir les fichiers statiques (frontend)
   app.use(express.static(config.publicDir));

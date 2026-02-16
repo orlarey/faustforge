@@ -1896,29 +1896,28 @@ footer > * {
 
 @media (max-width: 1100px) {
   header {
-    flex-wrap: wrap;
-    row-gap: var(--ui-space-2);
+    grid-template-columns: auto minmax(220px, 1fr) auto;
+    gap: var(--ui-space-2);
   }
 
   .header-brand {
-    order: 1;
+    justify-self: start;
   }
 
   .header-controls {
-    order: 2;
-    margin-left: auto;
-    flex-wrap: wrap;
+    margin-left: 0;
+    flex-wrap: nowrap;
     justify-content: flex-end;
+    min-width: 0;
   }
 
   .header-nav {
-    order: 3;
-    flex: 1 1 100%;
+    min-width: 0;
     justify-content: center;
   }
 
   main {
-    padding-top: 104px;
+    padding-top: 72px;
   }
 
   .code-toolbar,
@@ -1952,13 +1951,11 @@ footer > * {
 
 @media (max-width: 860px) {
   .header-controls {
-    width: 100%;
-    margin-left: 0;
-    justify-content: center;
+    justify-content: flex-end;
   }
 
   #session-label {
-    max-width: 52vw;
+    max-width: clamp(140px, 42vw, 280px);
   }
 
   .svg-toolbar-controls,
@@ -1972,8 +1969,7 @@ footer > * {
 
 @media (max-width: 700px) {
   header {
-    height: auto;
-    flex-wrap: wrap;
+    grid-template-columns: auto minmax(140px, 1fr) auto;
     padding: var(--ui-space-2) var(--ui-space-3);
     gap: var(--ui-space-2);
   }
@@ -1987,23 +1983,23 @@ footer > * {
   }
 
   .header-nav {
-    order: 3;
-    flex: 1 1 100%;
+    min-width: 0;
     justify-content: center;
   }
 
   .header-controls {
-    margin-left: auto;
+    margin-left: 0;
   }
 
   #session-label {
-    min-width: 140px;
+    min-width: 120px;
+    max-width: 46vw;
     font-size: 0.75rem;
   }
 
   main {
     padding: var(--ui-space-3);
-    padding-top: 88px;
+    padding-top: 72px;
     padding-bottom: 40px;
   }
 
@@ -2025,6 +2021,8 @@ footer > * {
   width: 100%;
   height: 100%;
   max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .run-controls-split {
@@ -2032,6 +2030,7 @@ footer > * {
   grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
   gap: var(--run-panel-gap);
   width: 100%;
+  min-width: calc(640px + var(--run-panel-gap));
   height: 100%;
   min-height: 280px;
 }
@@ -2459,7 +2458,7 @@ footer::before,
 
 @media (max-width: 980px) {
   .run-controls-split {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(260px, 1fr) minmax(240px, 1fr);
+    grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
+    grid-template-rows: 1fr;
   }
 }

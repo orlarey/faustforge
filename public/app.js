@@ -54,6 +54,8 @@ let pasteSink = null;
 let localViewStickyUntil = 0;
 let lastLocalViewResyncAt = 0;
 let tooltipApplyRaf = null;
+let liveRefreshInFlight = false;
+const liveContentShaBySha = Object.create(null);
 
 function extractLabelText(el) {
   const label = el.closest('label');
@@ -248,6 +250,7 @@ async function renderCurrentView() {
             uiZoom: state.runGlobal.uiZoom,
             orbitZoom: state.runGlobal.orbitZoom,
             params: state.runStateBySha[state.currentSha]?.params,
+            paramCells: state.runStateBySha[state.currentSha]?.paramCells,
             orbitUi: state.runStateBySha[state.currentSha]?.orbitUi || state.runGlobal.orbitUi
           }
         : undefined;
@@ -301,6 +304,12 @@ async function renderCurrentView() {
             params: snapshot.params
           };
         }
+        if (snapshot.paramCells) {
+          state.runStateBySha[state.currentSha] = {
+            ...(state.runStateBySha[state.currentSha] || {}),
+            paramCells: snapshot.paramCells
+          };
+        }
       },
       onScrollChange: (line) => {
         if (!scrollState || typeof line !== 'number') return;
@@ -330,7 +339,10 @@ async function loadSessions() {
     if (!response.ok) {
       throw new Error(result.error || 'Failed to load sessions');
     }
-    state.sessions = result.sessions || [];
+    state.sessions = (result.sessions || []).map((s) => ({
+      ...s,
+      kind: s && s.kind === 'live' ? 'live' : 'static'
+    }));
   } catch (err) {
     console.warn('Failed to load sessions:', err);
     state.sessions = [];
@@ -358,7 +370,7 @@ function updateSessionNavigation() {
 
   if (isEmpty) {
     // Session vide
-    sessionLabel.textContent = 'Empty | Drop or Click';
+    sessionLabel.textContent = 'Empty | Drop .dsp';
     sessionLabel.classList.add('clickable');
     sessionPrev.disabled = state.sessions.length === 0;
     sessionNext.disabled = true;
@@ -368,8 +380,11 @@ function updateSessionNavigation() {
   } else {
     // Session active
     const session = state.sessions[state.sessionIndex];
-    const shortSha = session.sha1.slice(0, 8);
-    sessionLabel.textContent = `${shortSha}… | ${session.filename}`;
+    const isLive = session.kind === 'live';
+    const shortId = isLive
+      ? `live:${session.sha1.slice(5, 13)}`
+      : `${session.sha1.slice(0, 8)}…`;
+    sessionLabel.textContent = `${isLive ? 'LIVE | ' : ''}${shortId} | ${session.filename}`;
     sessionLabel.classList.remove('clickable');
     sessionPrev.disabled = state.sessionIndex === 0;
     sessionNext.disabled = false; // On peut toujours aller vers session vide
@@ -414,6 +429,9 @@ async function loadSessionByIndex(index) {
 
   const session = state.sessions[index];
   state.currentSha = session.sha1;
+  if (session.kind === 'live' && typeof session.content_sha1 === 'string') {
+    liveContentShaBySha[session.sha1] = session.content_sha1;
+  }
   state.sessionIndex = index;
 
   updateSessionNavigation();
@@ -672,7 +690,7 @@ function hideInterface() {
       <div class="empty-center">
         <div class="empty-icon" aria-hidden="true"></div>
         <div class="empty-title">Drop a .dsp file here</div>
-        <div class="empty-subtitle">or click to select a file</div>
+        <div class="empty-subtitle">or paste Faust code</div>
       </div>
       <div class="empty-mcp-wrap">
         <button type="button" class="empty-mcp-copy" data-copy="mcp-config">Copy</button>
@@ -853,21 +871,52 @@ async function pollState() {
   }
 }
 
-// Clic sur le label de session (pour charger un fichier si vide)
-sessionLabel.addEventListener('click', () => {
-  if (state.sessionIndex >= state.sessions.length) {
-    fileInput.click();
-  }
-});
+async function pollLiveSessionRefresh() {
+  if (liveRefreshInFlight) return;
+  if (!state.currentSha) return;
 
-viewContainer.addEventListener('click', (event) => {
-  if (state.sessionIndex >= state.sessions.length) {
-    if (event.target && event.target.closest('.empty-mcp-wrap')) {
-      return;
+  const session = state.sessions.find((s) => s.sha1 === state.currentSha);
+  if (!session || session.kind !== 'live') return;
+
+  const sha = state.currentSha;
+  const knownContentSha =
+    typeof liveContentShaBySha[sha] === 'string'
+      ? liveContentShaBySha[sha]
+      : (typeof session.content_sha1 === 'string' ? session.content_sha1 : '');
+  liveRefreshInFlight = true;
+  try {
+    const response = await fetch(`/api/${sha}/live/refresh`, { method: 'POST' });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) return;
+
+    const latestContentSha = typeof result.contentSha1 === 'string' ? result.contentSha1 : '';
+    if (latestContentSha) {
+      liveContentShaBySha[sha] = latestContentSha;
     }
-    fileInput.click();
+
+    if (result.errors && String(result.errors).trim()) {
+      showError(result.errors);
+    } else {
+      hideError();
+    }
+
+    const contentChanged = !!latestContentSha && latestContentSha !== knownContentSha;
+    if ((result.changed || contentChanged) && state.currentSha === sha) {
+      await loadSessions();
+      refreshSessionIndex();
+      updateSessionNavigation();
+      showInterface();
+      await renderCurrentView();
+    }
+  } catch {
+    // ignore
+  } finally {
+    liveRefreshInFlight = false;
   }
-});
+}
+
+// Clic sur le label de session vide: no-op (load via drop/paste).
+sessionLabel.addEventListener('click', () => {});
 
 viewSelect.addEventListener('change', (e) => {
   const viewId = e.target.value;
@@ -918,7 +967,11 @@ if (refreshSessionBtn) {
     hideError();
 
     try {
-      const response = await fetch(`/api/${session.sha1}/refresh`, { method: 'POST' });
+      const refreshUrl =
+        session.kind === 'live'
+          ? `/api/${session.sha1}/live/refresh`
+          : `/api/${session.sha1}/refresh`;
+      const response = await fetch(refreshUrl, { method: 'POST' });
       const result = await response.json();
       if (!response.ok) {
         throw new Error(result.error || 'Refresh failed');
@@ -1061,15 +1114,19 @@ async function init() {
   await loadViews();
   await loadSessions();
 
-  // Initialiser à la session vide
-  state.sessionIndex = state.sessions.length;
-  updateSessionNavigation();
-  hideInterface();
+  if (state.sessions.length > 0) {
+    await loadSessionByIndex(state.sessions.length - 1);
+  } else {
+    // Initialiser à la session vide
+    state.sessionIndex = state.sessions.length;
+    updateSessionNavigation();
+    hideInterface();
+  }
   showAudioGate();
   state.audioUnlocked = false;
 
-  // Sync initial state and require explicit audio unlock per opened tab.
-  syncState({ sha1: null, view: state.currentView, audioUnlocked: false });
+  // Require explicit audio unlock per opened tab.
+  syncState({ audioUnlocked: false });
 
   // Charger la version Faust pour le footer
   if (footerVersion) {
@@ -1099,6 +1156,8 @@ async function init() {
 
   // Poll shared state (MCP may update it)
   setInterval(pollState, 1500);
+  // Auto-refresh live session in the active view when source file changes on disk.
+  setInterval(pollLiveSessionRefresh, 800);
 
   applyTooltips(document);
   const tooltipObserver = new MutationObserver(() => {
