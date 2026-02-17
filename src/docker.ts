@@ -7,6 +7,7 @@ const TIMEOUT_MS = 30000; // 30 secondes
 const VERSION_TIMEOUT_MS = 10000; // 10 secondes
 
 let cachedFaustVersion: string | null = null;
+let cachedFaustHelp: string | null = null;
 const CONTAINER_SESSIONS_DIR = process.env.SESSIONS_DIR || '/app/sessions';
 const HOST_SESSIONS_DIR = process.env.HOST_SESSIONS_DIR || '';
 const WINDOWS_ABS_PATH_RE = /^([a-zA-Z]):[\\/](.*)$/;
@@ -206,6 +207,53 @@ export function getFaustVersion(): Promise<string> {
 }
 
 /**
+ * Récupère l'aide du compilateur Faust (`faust -h`) via Docker.
+ */
+export function getFaustHelp(): Promise<string> {
+  if (cachedFaustHelp) {
+    return Promise.resolve(cachedFaustHelp);
+  }
+  return new Promise((resolve) => {
+    const dockerArgs = ['run', '--rm', DOCKER_IMAGE, '-h'];
+    let stdout = '';
+    let stderr = '';
+    let killed = false;
+    const proc = spawn('docker', dockerArgs);
+    const timer = setTimeout(() => {
+      killed = true;
+      proc.kill('SIGKILL');
+    }, VERSION_TIMEOUT_MS);
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    proc.on('close', () => {
+      clearTimeout(timer);
+      if (killed) {
+        resolve('Faust help unavailable (timeout)');
+        return;
+      }
+      const output = (stdout || stderr).trim();
+      if (!output) {
+        resolve('Faust help unavailable');
+        return;
+      }
+      cachedFaustHelp = output;
+      resolve(output);
+    });
+
+    proc.on('error', () => {
+      clearTimeout(timer);
+      resolve('Faust help unavailable');
+    });
+  });
+}
+
+/**
  * Analyse un fichier Faust (génère C++, SVG, et graphes DOT)
  */
 export async function analyzeFaust(
@@ -239,6 +287,29 @@ export async function analyzeFaust(
     }
   }
 
+  return {
+    success: result.success,
+    errors: result.stderr
+  };
+}
+
+function parseFaustFlags(flags: string): string[] {
+  const text = String(flags || '').trim();
+  if (!text) return [];
+  return text.split(/\s+/).filter(Boolean);
+}
+
+/**
+ * Compile uniquement le C++ généré avec un jeu d'options Faust.
+ */
+export async function compileFaustCpp(
+  sessionPath: string,
+  filename: string,
+  flags: string
+): Promise<{ success: boolean; errors: string }> {
+  const customArgs = parseFaustFlags(flags);
+  const args = [...customArgs, '-o', 'generated.cpp'];
+  const result = await runFaustDocker(sessionPath, filename, args);
   return {
     success: result.success,
     errors: result.stderr

@@ -6,10 +6,12 @@ import { SessionManager } from '../sessions';
 import { StateStore, View, AppState, RunParamCell } from '../state';
 import {
   analyzeFaust,
+  compileFaustCpp,
   compileFaustWasm,
   compileFaustWasmRun,
   compileFaustWebapp,
-  getFaustVersion
+  getFaustVersion,
+  getFaustHelp
 } from '../docker';
 
 export function createApiRouter(sessionManager: SessionManager, stateStore: StateStore): Router {
@@ -443,6 +445,19 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       res.json({ version });
     } catch {
       res.json({ version: 'Faust version unknown' });
+    }
+  });
+
+  /**
+   * GET /faust/help
+   * Récupère l'aide du compilateur Faust (options disponibles).
+   */
+  router.get('/faust/help', async (_req: Request, res: Response) => {
+    try {
+      const help = await getFaustHelp();
+      res.json({ help });
+    } catch {
+      res.json({ help: 'Faust help unavailable' });
     }
   });
 
@@ -923,6 +938,37 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
 
     res.type('text/plain').send(content);
+  });
+
+  /**
+   * POST /:sha/compile/cpp
+   * Recompile le C++ avec des options Faust personnalisées.
+   * Body: { flags?: string }
+   */
+  router.post('/:sha/compile/cpp', async (req: Request, res: Response) => {
+    const { sha } = req.params;
+    const session = sessionManager.getSession(sha);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    const rawFlags = req.body?.flags;
+    if (rawFlags !== undefined && typeof rawFlags !== 'string') {
+      res.status(400).json({ error: 'Invalid flags' });
+      return;
+    }
+    const flags = typeof rawFlags === 'string' ? rawFlags : '';
+    try {
+      const result = await compileFaustCpp(session.path, session.filename, flags);
+      if (!result.success) {
+        res.status(400).json({ success: false, error: result.errors || 'C++ compilation failed' });
+        return;
+      }
+      res.json({ success: true, flags, errors: result.errors || '' });
+    } catch (err) {
+      console.error('Error in /compile/cpp:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    }
   });
 
   /**

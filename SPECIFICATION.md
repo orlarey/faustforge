@@ -417,6 +417,48 @@ Vue "svg"  → zip(svg/)
 Vue "run"  → zip(webapp/)
 ```
 
+### O‑8bis : Presets d’options de compilation C++ (vue cpp)
+
+Objectif: rendre visible l’effet des options Faust sur `generated.cpp`.
+
+Règles UX:
+
+1. La zone d’édition des options en vue `cpp` affiche toujours les options ayant servi
+   à générer le C++ actuellement affiché.
+2. `Enter` dans cette zone déclenche une recompilation C++ avec les options saisies.
+3. Les options sont normalisées par compactage des espaces:
+   - trim début/fin
+   - remplacement des séquences d’espaces par un espace unique
+4. L’identité d’un preset est la chaîne normalisée.
+5. Deux presets de contenu identique fusionnent en un seul preset (unicité forte).
+6. Les presets sont ordonnés par récence d’usage (`lastUsedAt` décroissant).
+7. Un preset invalidé (échec de compilation avec ce DSP déjà valide en défaut)
+   est refusé en application tant qu’il n’est pas modifié.
+8. Un preset non valide ne doit jamais devenir le preset actif affiché.
+
+Modèle minimal:
+
+```text
+CppPreset ::= {
+  flags      : String,             -- forme normalisée, identité du preset
+  status     : "valid" | "invalid",
+  lastUsedAt : Number              -- ms epoch
+}
+```
+
+Opération API dédiée:
+
+```text
+W⟦compile_cpp_with_flags⟧ : (SHA1 × flags:String) → Result<(), Errors>
+```
+
+Effets:
+- sur succès: `generated.cpp` est remplacé par la version compilée avec `flags`
+- sur échec: `generated.cpp` affiché reste inchangé
+
+Précondition fonctionnelle:
+- La session DSP courante est déjà valide avec les options par défaut.
+
 ### O‑9 : Version du compilateur
 
 ```text
