@@ -178,16 +178,41 @@ async function loadViews() {
  * Génère le sélecteur de vue
  */
 function generateViewSelect() {
+  const currentSession = getCurrentSession();
+  const draftOnlyDsp = isDraftLiveSession(currentSession);
+  if (draftOnlyDsp && state.currentView !== 'dsp') {
+    state.currentView = 'dsp';
+  }
   viewSelect.innerHTML = '';
   for (const view of state.views) {
     const option = document.createElement('option');
     option.value = view.id;
     option.textContent = view.name;
+    if (draftOnlyDsp && view.id !== 'dsp') {
+      option.disabled = true;
+    }
     if (view.id === state.currentView) {
       option.selected = true;
     }
     viewSelect.appendChild(option);
   }
+}
+
+function getCurrentSession() {
+  if (state.sessionIndex < 0 || state.sessionIndex >= state.sessions.length) return null;
+  return state.sessions[state.sessionIndex] || null;
+}
+
+function isDraftLiveSession(session) {
+  return !!(session && session.kind === 'live' && session.live_draft === true);
+}
+
+function getEffectiveView(viewId) {
+  const session = getCurrentSession();
+  if (isDraftLiveSession(session)) {
+    return 'dsp';
+  }
+  return viewId;
 }
 
 /**
@@ -196,8 +221,9 @@ function generateViewSelect() {
 async function switchView(viewId, options = {}) {
   const isRemote = options && options.source === 'remote';
   const persist = options && options.persist === false ? false : true;
+  const effectiveViewId = getEffectiveView(viewId);
   hideError();
-  if (viewId !== state.currentView) {
+  if (effectiveViewId !== state.currentView) {
     captureScrollLine();
     const currentView = state.views.find(v => v.id === state.currentView);
     if (currentView && typeof currentView.dispose === 'function') {
@@ -209,10 +235,8 @@ async function switchView(viewId, options = {}) {
     }
   }
 
-  state.currentView = viewId;
-  if (viewSelect.value !== viewId) {
-    viewSelect.value = viewId;
-  }
+  state.currentView = effectiveViewId;
+  generateViewSelect();
 
   if (!isRemote) {
     // Protect against transient POST failures that could make pollState restore an old remote view.
@@ -221,7 +245,7 @@ async function switchView(viewId, options = {}) {
 
   // Persist view first to avoid race with Run view state updates (/api/state).
   if (persist) {
-    await syncState({ view: viewId });
+    await syncState({ view: effectiveViewId });
   }
 
   // Afficher la vue
@@ -233,6 +257,11 @@ async function switchView(viewId, options = {}) {
  */
 async function renderCurrentView() {
   if (!state.currentSha) return;
+  const effectiveView = getEffectiveView(state.currentView);
+  if (effectiveView !== state.currentView) {
+    state.currentView = effectiveView;
+    generateViewSelect();
+  }
 
   const view = state.views.find(v => v.id === state.currentView);
   if (!view) return;
@@ -381,10 +410,11 @@ function updateSessionNavigation() {
     // Session active
     const session = state.sessions[state.sessionIndex];
     const isLive = session.kind === 'live';
+    const isDraft = isDraftLiveSession(session);
     const shortId = isLive
       ? `live:${session.sha1.slice(5, 13)}`
       : `${session.sha1.slice(0, 8)}…`;
-    sessionLabel.textContent = `${isLive ? 'LIVE | ' : ''}${shortId} | ${session.filename}`;
+    sessionLabel.textContent = `${isLive ? 'LIVE | ' : ''}${shortId} | ${session.filename}${isDraft ? ' (draft)' : ''}`;
     sessionLabel.classList.remove('clickable');
     sessionPrev.disabled = state.sessionIndex === 0;
     sessionNext.disabled = false; // On peut toujours aller vers session vide
@@ -392,6 +422,7 @@ function updateSessionNavigation() {
     if (refreshSessionBtn) refreshSessionBtn.classList.remove('hidden');
     if (downloadBtn) downloadBtn.classList.remove('hidden');
   }
+  generateViewSelect();
 }
 
 /**
@@ -433,6 +464,7 @@ async function loadSessionByIndex(index) {
     liveContentShaBySha[session.sha1] = session.content_sha1;
   }
   state.sessionIndex = index;
+  state.currentView = getEffectiveView(state.currentView);
 
   updateSessionNavigation();
   hideError();
@@ -462,6 +494,7 @@ async function loadEmptySession() {
   captureScrollLine();
   state.currentSha = null;
   state.sessionIndex = state.sessions.length;
+  state.currentView = 'dsp';
 
   updateSessionNavigation();
   hideError();
@@ -837,7 +870,7 @@ async function pollState() {
       }
     }
 
-    if (remote.view && remote.view !== state.currentView) {
+    if (remote.view && getEffectiveView(remote.view) !== state.currentView) {
       const now = Date.now();
       if (now < localViewStickyUntil) {
         // Keep local choice authoritative for a short window after user view changes.
@@ -848,7 +881,7 @@ async function pollState() {
       } else {
         await switchView(remote.view, { source: 'remote', persist: false });
       }
-    } else if (remote.view === state.currentView) {
+    } else if (getEffectiveView(remote.view) === state.currentView) {
       localViewStickyUntil = 0;
     }
 

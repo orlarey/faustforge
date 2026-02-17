@@ -5,6 +5,7 @@ import * as path from 'path';
 export interface SessionMeta {
   sha1: string;
   kind?: 'static' | 'live';
+  live_draft?: boolean;
   source_path?: string;
   source_mtime_ms?: number;
   content_sha1?: string;
@@ -21,6 +22,7 @@ export interface Session {
 export interface SessionSummary {
   sha1: string;
   kind: 'static' | 'live';
+  live_draft?: boolean;
   filename: string;
   compilation_time: number;
   source_path?: string;
@@ -46,8 +48,67 @@ export class SessionManager {
       fs.mkdirSync(sessionsDir, { recursive: true });
     }
 
+    // Migration: align legacy live sessions with current draft semantics.
+    this.migrateLiveDraftMetadata();
+
     // Charger les sessions existantes
     this.loadExistingSessions();
+  }
+
+  private isBlankText(content: string): boolean {
+    return content.trim().length === 0;
+  }
+
+  /**
+   * Recompute `live_draft` for all existing live sessions.
+   * This keeps old metadata consistent with the current "empty file => draft" rule.
+   */
+  private migrateLiveDraftMetadata(): void {
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(this.sessionsDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !this.isValidSessionId(entry.name)) continue;
+      const metadataPath = path.join(this.sessionsDir, entry.name, 'metadata.json');
+      if (!fs.existsSync(metadataPath)) continue;
+
+      try {
+        const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        if (metadata.kind !== 'live') continue;
+
+        let sourceContent = '';
+        if (metadata.source_path && fs.existsSync(metadata.source_path)) {
+          sourceContent = fs.readFileSync(metadata.source_path, 'utf8');
+        } else {
+          const fallbackSource = path.join(this.sessionsDir, entry.name, 'user_code.dsp');
+          if (fs.existsSync(fallbackSource)) {
+            sourceContent = fs.readFileSync(fallbackSource, 'utf8');
+          }
+        }
+
+        const shouldBeDraft = this.isBlankText(sourceContent);
+        const hasChanged = metadata.live_draft !== shouldBeDraft;
+        if (!hasChanged) continue;
+
+        metadata.live_draft = shouldBeDraft;
+        fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+
+        if (shouldBeDraft) {
+          const errorsPath = path.join(this.sessionsDir, entry.name, 'errors.log');
+          try {
+            fs.writeFileSync(errorsPath, '', 'utf8');
+          } catch {
+            // ignore cleanup failures
+          }
+        }
+      } catch {
+        // Ignore malformed metadata entries.
+      }
+    }
   }
 
   /**
@@ -70,6 +131,7 @@ export class SessionManager {
             summaries.push({
               sha1: id,
               kind,
+              live_draft: metadata.live_draft === true,
               filename: metadata.filename,
               compilation_time: metadata.compilation_time
             });
@@ -227,6 +289,7 @@ export class SessionManager {
     }
     const sourceStats = fs.statSync(resolvedPath);
     const code = fs.readFileSync(resolvedPath, 'utf8');
+    const isDraft = code.trim().length === 0;
     const filename = path.basename(resolvedPath);
     const sourceSha = this.computeSha1(code);
     const liveId = `live-${this.computeSha1(resolvedPath)}`;
@@ -256,6 +319,7 @@ export class SessionManager {
     const metadata: SessionMeta = {
       sha1: liveId,
       kind: 'live',
+      live_draft: isDraft,
       source_path: resolvedPath,
       source_mtime_ms: sourceStats.mtimeMs,
       content_sha1: sourceSha,
@@ -339,6 +403,7 @@ export class SessionManager {
         out.push({
           sha1: id,
           kind: 'live',
+          live_draft: metadata.live_draft === true,
           filename: metadata.filename,
           compilation_time: metadata.compilation_time,
           source_path: metadata.source_path,
@@ -480,6 +545,7 @@ export class SessionManager {
         summaries.push({
           sha1: metadata.sha1,
           kind: metadata.kind === 'live' ? 'live' : 'static',
+          live_draft: metadata.live_draft === true,
           filename: metadata.filename,
           compilation_time: metadata.compilation_time,
           source_path: metadata.source_path,

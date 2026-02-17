@@ -64,7 +64,7 @@ http://localhost:3000
 ```
 
 In this setup, `.dsp` files under the mounted workspace are discovered automatically.
-When a new `.dsp` file appears, it is auto-opened and becomes the active session.
+When a `.dsp` file appears or is modified, it is auto-opened and becomes the active session.
 This matches the helper script default workspace path: `$HOME/faust-workspace`.
 
 Notes:
@@ -137,8 +137,10 @@ When `LIVE_AUTO_DISCOVER=1` is enabled and a host folder is mounted to `LIVE_WOR
 
 - Every `.dsp` file found under that workspace is tracked as a **live session**.
 - Saving changes to a tracked `.dsp` file triggers automatic live refresh/recompilation.
-- Creating a new `.dsp` file automatically opens it and makes it the active session (same behavior as dropping a file in the UI).
+- Creating or modifying a `.dsp` file automatically opens it and makes it the active session (same behavior as dropping a file in the UI).
 - Live session IDs are stable for a given file path (moving/renaming a file creates a different live session ID).
+- Empty live files are treated as **draft** sessions: compilation is skipped until content is non-empty.
+- In draft mode, faustforge forces `dsp` view and other views are temporarily disabled.
 
 Operational notes:
 

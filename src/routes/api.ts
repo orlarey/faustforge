@@ -382,6 +382,12 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
     try {
       const session = sessionManager.createOrUpdateLiveSessionFromFile(filePath);
+      const code = sessionManager.getFile(session.sha1, 'user_code.dsp')?.toString('utf8') || '';
+      if (code.trim().length === 0) {
+        sessionManager.setErrors(session.sha1, '');
+        res.json({ sha1: session.sha1, kind: 'live', filename: session.filename, errors: '' });
+        return;
+      }
       const result = await analyzeFaust(session.path, session.filename);
       res.json({ sha1: session.sha1, kind: 'live', filename: session.filename, errors: result.errors });
     } catch (err) {

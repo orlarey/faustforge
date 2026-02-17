@@ -66,6 +66,15 @@ async function walkDspFiles(rootDir: string, ignoreDirs: Set<string>): Promise<s
   return out;
 }
 
+function isBlankSourceFile(filePath: string): boolean {
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    return content.trim().length === 0;
+  } catch {
+    return false;
+  }
+}
+
 export class LiveWorkspaceSync {
   private readonly sessionManager: SessionManager;
   private readonly stateStore: StateStore;
@@ -105,38 +114,42 @@ export class LiveWorkspaceSync {
     try {
       const ignore = new Set(this.config.ignoreDirs);
       const dspFiles = await walkDspFiles(this.config.rootDir, ignore);
-      let newestDiscovered: { sha1: string; filename: string; mtimeMs: number } | null = null;
+      let newestChanged: { sha1: string; filename: string; mtimeMs: number } | null = null;
       for (const filePath of dspFiles) {
         try {
           const ensured = this.sessionManager.ensureLiveSessionFromFile(filePath);
           if (!ensured.changed) continue;
-          const result = await analyzeFaust(ensured.session.path, ensured.session.filename);
-          this.sessionManager.setErrors(ensured.session.sha1, result.errors || '');
-          if (ensured.isNew) {
-            let mtimeMs = 0;
-            try {
-              mtimeMs = fs.statSync(filePath).mtimeMs;
-            } catch {
-              mtimeMs = Date.now();
-            }
-            if (!newestDiscovered || mtimeMs >= newestDiscovered.mtimeMs) {
-              newestDiscovered = {
-                sha1: ensured.session.sha1,
-                filename: ensured.session.filename,
-                mtimeMs
-              };
-            }
+          if (isBlankSourceFile(filePath)) {
+            // Draft live session: keep the session visible/active but avoid immediate
+            // compiler errors while the user has just created an empty file.
+            this.sessionManager.setErrors(ensured.session.sha1, '');
+          } else {
+            const result = await analyzeFaust(ensured.session.path, ensured.session.filename);
+            this.sessionManager.setErrors(ensured.session.sha1, result.errors || '');
+          }
+          let mtimeMs = 0;
+          try {
+            mtimeMs = fs.statSync(filePath).mtimeMs;
+          } catch {
+            mtimeMs = Date.now();
+          }
+          if (!newestChanged || mtimeMs >= newestChanged.mtimeMs) {
+            newestChanged = {
+              sha1: ensured.session.sha1,
+              filename: ensured.session.filename,
+              mtimeMs
+            };
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           console.warn(`[live] failed for ${filePath}: ${message}`);
         }
       }
-      if (newestDiscovered) {
-        // Mimic a user drop/open: make the newest discovered DSP the active session.
+      if (newestChanged) {
+        // Mimic a user drop/open: make the most recently changed DSP the active session.
         this.stateStore.update({
-          sha1: newestDiscovered.sha1,
-          filename: newestDiscovered.filename
+          sha1: newestChanged.sha1,
+          filename: newestChanged.filename
         });
       }
     } finally {
