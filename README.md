@@ -30,6 +30,8 @@ http://localhost:3000
 
 Notes:
 - Sessions are persisted in `~/.faustforge/sessions`.
+- `SESSIONS_DIR` is the in-container path used by faustforge for session storage. It must match the container side of the sessions volume mount (`/app/sessions`).
+- `FAUST_HTTP_URL` is the base HTTP URL used by internal components (including MCP in the container) to call the faustforge API.
 - `/var/run/docker.sock` is required because the app launches the Faust Docker image for C++ compilation.
 - `HOST_SESSIONS_DIR` must point to the host path of sessions so nested Docker mounts resolve correctly.
 
@@ -37,13 +39,14 @@ Notes:
 
 Use this mode if you want:
 - automatic recompilation when `.dsp` files change on disk
+- automatic switch to newly discovered `.dsp` files (same behavior as dropping a file in the UI)
 
 ```bash
 docker run -d \
   --name faustforge \
   -p 3000:3000 \
   -v "$HOME/.faustforge/sessions:/app/sessions" \
-  -v "$HOME/dev/faust:/workspace" \
+  -v "$HOME/faust-workspace:/workspace" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e SESSIONS_DIR=/app/sessions \
   -e HOST_SESSIONS_DIR="$HOME/.faustforge/sessions" \
@@ -61,6 +64,14 @@ http://localhost:3000
 ```
 
 In this setup, `.dsp` files under the mounted workspace are discovered automatically.
+When a new `.dsp` file appears, it is auto-opened and becomes the active session.
+This matches the helper script default workspace path: `$HOME/faust-workspace`.
+
+Notes:
+- `LIVE_AUTO_DISCOVER=1` enables periodic scan of `.dsp` files under `LIVE_WORKSPACE_ROOT`.
+- `LIVE_WORKSPACE_ROOT` must match the container side of the workspace mount (`/workspace` in this example).
+- `LIVE_SCAN_INTERVAL_MS` controls detection/refresh latency (default `1500` ms).
+- Use `LIVE_AUTO_DISCOVER=0` to disable live workspace behavior.
 
 Optional overrides:
 
@@ -120,6 +131,21 @@ Note that you can create new sessions from any session and any view. For example
 
 ![Create session](docs/screenshots/02-create-session.png)
 
+### 2.1) Live sessions (workspace mode)
+
+When `LIVE_AUTO_DISCOVER=1` is enabled and a host folder is mounted to `LIVE_WORKSPACE_ROOT`:
+
+- Every `.dsp` file found under that workspace is tracked as a **live session**.
+- Saving changes to a tracked `.dsp` file triggers automatic live refresh/recompilation.
+- Creating a new `.dsp` file automatically opens it and makes it the active session (same behavior as dropping a file in the UI).
+- Live session IDs are stable for a given file path (moving/renaming a file creates a different live session ID).
+
+Operational notes:
+
+- Scan cadence is controlled by `LIVE_SCAN_INTERVAL_MS` (default: `1500` ms).
+- Auto-discovery can be disabled with `LIVE_AUTO_DISCOVER=0`.
+- The regular **Refresh** button still works and forces regeneration for the currently selected session.
+
 ### 3) Navigate sessions and views
 
 You can navigate between sessions using the left and right arrows, and between views using the up and down arrows or the view menu.
@@ -175,7 +201,7 @@ Orbit UI is a 2D control space for fast exploration of many parameters at once.
   - can move visually, but does not affect DSP parameter
   - ignored by center/radius gestures
   - ignored by parameter-to-orbit sync
-- In polyphonic mode, frequency/gain-like sliders are auto-disabled to avoid conflicting controls.
+- In polyphonic mode, Orbit auto-disables only sliders matching `freq`, `gate`, or `gain`.
 
 ### 6) Analyze graphs
 
@@ -253,7 +279,7 @@ docker run -d \
   --name faustforge \
   -p 3000:3000 \
   -v "$HOME/.faustforge/sessions:/app/sessions" \
-  -v "$HOME/dev/faust:/workspace" \
+  -v "$HOME/faust-workspace:/workspace" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e SESSIONS_DIR=/app/sessions \
   -e HOST_SESSIONS_DIR="$HOME/.faustforge/sessions" \
