@@ -45,6 +45,7 @@ const footerVersion = document.getElementById('footer-version');
 const headerAppVersion = document.getElementById('header-app-version');
 const deleteSessionBtn = document.getElementById('delete-session');
 const refreshSessionBtn = document.getElementById('refresh-session');
+const editSessionBtn = document.getElementById('edit-session');
 const archiveBtn = document.getElementById('archive-btn');
 const audioGate = document.getElementById('audio-gate');
 const audioGateButton = document.getElementById('audio-gate-button');
@@ -405,6 +406,7 @@ function updateSessionNavigation() {
     sessionNext.disabled = true;
     if (deleteSessionBtn) deleteSessionBtn.classList.add('hidden');
     if (refreshSessionBtn) refreshSessionBtn.classList.add('hidden');
+    if (editSessionBtn) editSessionBtn.classList.add('hidden');
     if (downloadBtn) downloadBtn.classList.add('hidden');
   } else {
     // Session active
@@ -420,6 +422,13 @@ function updateSessionNavigation() {
     sessionNext.disabled = false; // On peut toujours aller vers session vide
     if (deleteSessionBtn) deleteSessionBtn.classList.remove('hidden');
     if (refreshSessionBtn) refreshSessionBtn.classList.remove('hidden');
+    if (editSessionBtn) {
+      if (isLive) {
+        editSessionBtn.classList.add('hidden');
+      } else {
+        editSessionBtn.classList.remove('hidden');
+      }
+    }
     if (downloadBtn) downloadBtn.classList.remove('hidden');
   }
   generateViewSelect();
@@ -787,6 +796,18 @@ async function downloadFromUrl(url, filename, fallbackError = 'Download failed')
   URL.revokeObjectURL(link.href);
 }
 
+function openEditorUrl(url) {
+  if (!url || typeof url !== 'string') return;
+  // Fire-and-forget custom URI dispatch without leaving current page.
+  const probe = document.createElement('iframe');
+  probe.style.display = 'none';
+  probe.src = url;
+  document.body.appendChild(probe);
+  setTimeout(() => {
+    probe.remove();
+  }, 1500);
+}
+
 // Event listeners
 if (downloadBtn) {
   downloadBtn.addEventListener('click', async () => {
@@ -1020,6 +1041,61 @@ if (refreshSessionBtn) {
 
       showInterface();
       await renderCurrentView();
+    } catch (err) {
+      showError(`Error: ${err.message}`);
+    } finally {
+      hideLoading();
+    }
+  });
+}
+
+if (editSessionBtn) {
+  editSessionBtn.addEventListener('click', async () => {
+    if (state.sessionIndex >= state.sessions.length || state.sessionIndex < 0) return;
+    const session = state.sessions[state.sessionIndex];
+    if (!session || session.kind === 'live') return;
+
+    showLoading();
+    hideError();
+    try {
+      const response = await fetch(`/api/${session.sha1}/edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          editor: 'vscode',
+          openEditor: true
+        })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || 'Edit failed');
+      }
+
+      if (result.editorUrl && result.openEditorRequested) {
+        openEditorUrl(result.editorUrl);
+      }
+
+      await loadSessions();
+      const liveSha = typeof result.liveSha1 === 'string' ? result.liveSha1 : null;
+      if (liveSha) {
+        const liveIndex = state.sessions.findIndex((s) => s.sha1 === liveSha);
+        if (liveIndex >= 0) {
+          await loadSessionByIndex(liveIndex);
+        } else {
+          state.currentSha = liveSha;
+          refreshSessionIndex();
+          updateSessionNavigation();
+          showInterface();
+          await renderCurrentView();
+          await syncState({ sha1: liveSha, view: state.currentView });
+        }
+      }
+
+      if (!result.editorUrl) {
+        showError('Live session created. Editor URL unavailable (configure HOST_LIVE_WORKSPACE_ROOT).');
+      } else {
+        hideError();
+      }
     } catch (err) {
       showError(`Error: ${err.message}`);
     } finally {

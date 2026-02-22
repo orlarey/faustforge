@@ -17,6 +17,8 @@ import {
 export function createApiRouter(sessionManager: SessionManager, stateStore: StateStore): Router {
   const router = Router();
   const sessionsBaseDir = process.env.SESSIONS_DIR || '/app/sessions';
+  const liveWorkspaceRoot = process.env.LIVE_WORKSPACE_ROOT || '/workspace';
+  const hostLiveWorkspaceRoot = process.env.HOST_LIVE_WORKSPACE_ROOT || '';
   const appVersion = readAppVersion();
   // Canonical in-memory shape for run parameter synchronization.
   // Every parameter is represented as a timestamped cell.
@@ -132,6 +134,25 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
         // Ignorer les erreurs de nettoyage
       }
     }
+  }
+
+  function isLiveSessionId(id: string): boolean {
+    return /^live-[0-9a-f]{40}$/.test(id);
+  }
+
+  function sanitizeEditableFilename(input: string): string {
+    const base = path.basename(String(input || 'session.dsp'));
+    const cleaned = base.replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (cleaned.toLowerCase().endsWith('.dsp')) {
+      return cleaned;
+    }
+    return `${cleaned}.dsp`;
+  }
+
+  function buildEditorUrl(editor: string, hostPath: string): string | null {
+    if (editor !== 'vscode') return null;
+    const normalized = hostPath.replace(/\\/g, '/');
+    return `vscode://file/${encodeURI(normalized)}`;
   }
 
   async function tarGzDirectory(
@@ -430,6 +451,98 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to refresh live session';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  /**
+   * POST /:sha/edit
+   * Convertit une session statique en session live éditable via fichier workspace.
+   * Body: { editor?: "vscode", openEditor?: boolean }
+   */
+  router.post('/:sha/edit', async (req: Request, res: Response) => {
+    const { sha } = req.params;
+    const { editor, openEditor } = req.body || {};
+    const chosenEditor = typeof editor === 'string' && editor.trim() ? editor.trim() : 'vscode';
+    const openEditorRequested = openEditor !== false;
+
+    if (!sessionManager.exists(sha)) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    if (isLiveSessionId(sha)) {
+      res.status(409).json({ error: 'Edit is only available for static sessions' });
+      return;
+    }
+    if (!liveWorkspaceRoot || !fs.existsSync(liveWorkspaceRoot)) {
+      res.status(400).json({
+        error: 'LIVE_WORKSPACE_ROOT is not available. Mount a workspace and configure LIVE_WORKSPACE_ROOT.'
+      });
+      return;
+    }
+
+    const session = sessionManager.getSession(sha);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const source = sessionManager.getFile(sha, 'user_code.dsp');
+    if (!source) {
+      res.status(404).json({ error: 'Source DSP not found' });
+      return;
+    }
+
+    const safeName = sanitizeEditableFilename(session.filename || 'session.dsp');
+    const targetDir = path.join(liveWorkspaceRoot, 'faustforge-edit');
+    const targetFile = path.join(targetDir, `${sha}-${safeName}`);
+
+    try {
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(targetFile, source);
+
+      const liveSession = sessionManager.createOrUpdateLiveSessionFromFile(targetFile);
+      const code = source.toString('utf8');
+      const isBlank = code.trim().length === 0;
+      let errors = '';
+      if (!isBlank) {
+        const result = await analyzeFaust(liveSession.path, liveSession.filename);
+        errors = result.errors || '';
+      } else {
+        sessionManager.setErrors(liveSession.sha1, '');
+      }
+
+      const state = stateStore.update({
+        sha1: liveSession.sha1,
+        filename: liveSession.filename
+      });
+
+      let hostPath: string | undefined;
+      let editorUrl: string | undefined;
+      if (hostLiveWorkspaceRoot) {
+        hostPath = path.join(hostLiveWorkspaceRoot, 'faustforge-edit', `${sha}-${safeName}`);
+        const computedEditorUrl = buildEditorUrl(chosenEditor, hostPath);
+        if (computedEditorUrl) {
+          editorUrl = computedEditorUrl;
+        }
+      }
+
+      res.json({
+        sourceSha1: sha,
+        liveSha1: liveSession.sha1,
+        filename: liveSession.filename,
+        containerPath: targetFile,
+        hostPath,
+        editorUrl,
+        openEditorRequested,
+        errors,
+        state: {
+          sha1: state.sha1,
+          filename: state.filename
+        }
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create editable live session';
       res.status(500).json({ error: message });
     }
   });

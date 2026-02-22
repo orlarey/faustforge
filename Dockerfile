@@ -1,9 +1,17 @@
+# syntax=docker/dockerfile:1.7
+
 FROM node:20-bookworm-slim AS build
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm config set fetch-retries 10 \
+    && npm config set fetch-retry-factor 2 \
+    && npm config set fetch-retry-mintimeout 10000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && npm config set fetch-timeout 300000 \
+    && npm ci --prefer-offline --no-audit --fund=false
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -14,6 +22,7 @@ COPY scripts/build-faust-doc-index.mjs ./scripts/build-faust-doc-index.mjs
 
 RUN npm run build
 RUN node ./scripts/build-faust-doc-index.mjs ./dist/faust-doc-index.json
+RUN npm prune --omit=dev
 
 FROM docker:27-cli AS dockercli
 
@@ -29,7 +38,7 @@ ENV PORT=3000
 ENV SESSIONS_DIR=/app/sessions
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+COPY --from=build /app/node_modules ./node_modules
 
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public

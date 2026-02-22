@@ -53,6 +53,7 @@ docker run -d \
   -e FAUST_HTTP_URL=http://localhost:3000 \
   -e LIVE_AUTO_DISCOVER=1 \
   -e LIVE_WORKSPACE_ROOT=/workspace \
+  -e HOST_LIVE_WORKSPACE_ROOT="$HOME/faust-workspace" \
   -e LIVE_SCAN_INTERVAL_MS=1500 \
   ghcr.io/orlarey/faustforge:latest
 ```
@@ -264,6 +265,7 @@ The helper script uses:
 - `HOST_SESSIONS_DIR` (default `$HOME/.faustforge/sessions`)
 - `LIVE_AUTO_DISCOVER` (optional, default `1`, set `0` to disable workspace auto-discovery)
 - `LIVE_WORKSPACE_ROOT` (optional, default `/workspace`)
+- `HOST_LIVE_WORKSPACE_ROOT` (optional, host path matching `LIVE_WORKSPACE_ROOT`, needed for `Edit` button editor URL)
 - `LIVE_SCAN_INTERVAL_MS` (optional, default `1500`)
 - `LIVE_IGNORE_DIRS` (optional CSV list, example: `.git,node_modules,build`)
 
@@ -288,6 +290,7 @@ docker run -d \
   -e FAUST_HTTP_URL=http://localhost:3000 \
   -e LIVE_AUTO_DISCOVER=1 \
   -e LIVE_WORKSPACE_ROOT=/workspace \
+  -e HOST_LIVE_WORKSPACE_ROOT="$HOME/faust-workspace" \
   -e LIVE_SCAN_INTERVAL_MS=1500 \
   faustforge:latest
 ```
@@ -406,3 +409,13 @@ make stop
 ```text
 ghcr.io/orlarey/faustforge:latest
 ```
+
+## Specifications
+
+- `SPECIFICATION.md` (service global)
+- `SPECIFICATION-EDIT-MODE.md` (mode édition statique -> live + ouverture éditeur hôte)
+- `SPECIFICATION-VSCODE-PLUGIN.md` (intégration VSCode <-> faustforge)
+- `SPECIFICATION-FAUST-CORE-UI.md`
+- `SPECIFICATION-FAUST-ORBIT-UI.md`
+- `SPECIFICATION-LIBRARYDOC.md`
+- `SPECIFICATION_SPECTRUM.md`
