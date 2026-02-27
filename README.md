@@ -331,7 +331,7 @@ Restart Claude Desktop.
 With MCP configured, Claude Desktop can control Faustforge and work on the same sessions as the web UI.
 
 What the AI can do:
-- Forge: submit/edit Faust DSP code and inspect generated artifacts.
+- Forge: submit Faust DSP code and inspect generated artifacts.
 - Play: switch to `run`, start/stop audio transport, and control UI parameters.
 - Analyze: capture and read spectrum snapshots to evaluate sonic changes.
 
@@ -340,7 +340,7 @@ Typical workflow:
 1) get_onboarding_guide()
 2) set_view("run")
 3) get_run_ui()
-4) run_transport("start")
+4) run_audio("on")
 5) set_run_param(...)
 6) set_run_param_and_get_spectrum(...)
 7) trigger_button_and_get_spectrum(...)
@@ -356,6 +356,7 @@ Run control tools:
 - `set_polyphony(voices)` -> set polyphony (`0,1,2,4,8,16,32,64`; `0` means mono)
 - `set_run_param(path, value)` -> set one continuous parameter
 - `set_run_param_and_get_spectrum(path, value, settleMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> set parameter + capture spectrum-summary time series + max-hold aggregate
+- `run_audio(state)` -> preferred transport control: `on`, `off`, or `toggle`
 - `run_transport(action)` -> `start`, `stop`, or `toggle`
 - `trigger_button(path, holdMs?)` -> safe press/release cycle
 - `trigger_button_and_get_spectrum(path, holdMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> trigger + spectrum-summary time series + max-hold aggregate
@@ -365,6 +366,19 @@ Run control tools:
 - `midi_note_on_and_get_spectrum(note, velocity?, settleMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> note-on + spectrum-summary time series + max-hold aggregate
 - `midi_note_off_and_get_spectrum(note, settleMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> note-off + spectrum-summary time series + max-hold aggregate
 - `midi_note_pulse_and_get_spectrum(note, velocity?, holdMs?, captureMs?, sampleEveryMs?, maxFrames?)` -> note-pulse + spectrum-summary time series + max-hold aggregate
+
+Session and navigation tools:
+- `submit(code, filename?, persistOnSuccessOnly?)` -> submit Faust code and optionally persist only on success
+- `get_errors(sha1)` -> fetch `errors.log` for one session
+- `get_state()` -> current shared state (`sha1`, `filename`, `view`)
+- `get_session()` -> current session only (`sha1`, `filename`)
+- `set_view(view)` -> set active view (`dsp`, `svg`, `run`, `cpp`, `tasks`, `signals`)
+- `get_view_content()` -> fetch content for the current view
+- `get_spectrum()` -> latest spectrum content regardless of current view
+- `list_sessions()` -> list known sessions (creation order)
+- `set_session(sha1)` -> activate one session
+- `prev_session()` / `next_session()` -> navigate session history
+- `get_audio_snapshot(duration_ms?, format?)` -> compatibility tool returning latest spectrum content
 
 Faust library documentation tools:
 - The Docker image ships with a prebuilt Faust doc index generated from `faustwasm` stdlib (`/usr/share/faust/stdfaust.lib`).
@@ -393,7 +407,7 @@ Audio quality quick interpretation (practical thresholds):
 
 Browser note:
 - On page open, faustforge requires an explicit `ENTER` click to unlock WebAudio in this tab.
-- MCP audio tools (`run_transport start/toggle`, trigger/capture tools) are blocked until this unlock step is done.
+- MCP audio tools (`run_audio on/toggle`, `run_transport start/toggle`, trigger/capture tools) are blocked until this unlock step is done.
 
 Parameter behavior:
 - `hslider`, `vslider`, `nentry`: value persists until changed.

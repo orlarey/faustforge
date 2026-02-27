@@ -1075,6 +1075,7 @@ async function startShowcasePreview() {
       await switchView(showcaseViews[nextIndex], { persist: false, trackUsage: false, animate: true });
     }, 6000);
   } catch (err) {
+    stopShowcasePreview();
     const message = err && err.message ? err.message : String(err);
     showAudioGate(`Showcase unavailable: ${message}`);
   }

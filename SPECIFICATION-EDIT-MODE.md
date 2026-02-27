@@ -57,7 +57,9 @@ EditResponse ::= {
   containerPath: PathContainer,
   hostPath?: PathHost,
   editorUrl?: String,
-  openEditorRequested: Bool
+  openEditorRequested: Bool,
+  errors?: String,                    -- log d'analyse/compilation live
+  state?: { sha1: SessionId?, filename: String? }
 }
 ```
 
@@ -155,7 +157,9 @@ Response:
   "containerPath": "/workspace/my.dsp",
   "hostPath": "/Users/me/faust-workspace/my.dsp",
   "editorUrl": "vscode://file//Users/me/faust-workspace/my.dsp",
-  "openEditorRequested": true
+  "openEditorRequested": true,
+  "errors": "",
+  "state": { "sha1": "live-<sha1>", "filename": "my.dsp" }
 }
 ```
 

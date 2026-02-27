@@ -222,7 +222,7 @@ async function ensureAudioUnlocked() {
   if (state && state.audioUnlocked === true) return;
   throw new McpError(
     ErrorCode.InvalidParams,
-    'Audio is locked. Open Faustforge UI and click "Enable Audio" once.'
+    'Audio is locked. Open Faustforge UI and click "ENTER" once.'
   );
 }
 
@@ -817,7 +817,16 @@ server.registerTool(
   {
     description: 'Set Run polyphony voices. Convention: 0 = mono. Allowed: 0,1,2,4,8,16,32,64.',
     inputSchema: {
-      voices: z.number().int().min(0).max(64)
+      voices: z.union([
+        z.literal(0),
+        z.literal(1),
+        z.literal(2),
+        z.literal(4),
+        z.literal(8),
+        z.literal(16),
+        z.literal(32),
+        z.literal(64)
+      ])
     }
   },
   async ({ voices }) => {
@@ -1202,7 +1211,7 @@ server.registerTool(
   'run_audio',
   {
     description:
-      'Control run audio state: on, off, or toggle. on/toggle require audio unlocked by one UI click ("Enable Audio").',
+      'Control run audio state: on, off, or toggle. on/toggle require audio unlocked by one UI click ("ENTER").',
     inputSchema: {
       state: z.enum(['on', 'off', 'toggle'])
     }
@@ -1222,7 +1231,7 @@ server.registerTool(
   'run_transport',
   {
     description:
-      'Control run transport: start, stop, or toggle audio. (Legacy alias; prefer run_audio with on/off/toggle.) Start/toggle require audio unlocked by one UI click ("Enable Audio").',
+      'Control run transport: start, stop, or toggle audio. (Legacy alias; prefer run_audio with on/off/toggle.) Start/toggle require audio unlocked by one UI click ("ENTER").',
     inputSchema: {
       action: z.enum(['start', 'stop', 'toggle'])
     }
