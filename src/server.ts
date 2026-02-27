@@ -21,7 +21,7 @@ export function createServer(config: ServerConfig): Application {
   // Créer le gestionnaire de sessions
   const sessionManager = new SessionManager(
     config.sessionsDir,
-    config.maxSessions ?? 50
+    config.maxSessions ?? 0
   );
 
   // Store d'état partagé (session/vue)

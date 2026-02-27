@@ -1186,6 +1186,8 @@ function renderOrbitUi(container, ui) {
     }
   );
 
+  // Ensure geometry is initialized before restoring remote state.
+  orbitUiInstance.resize();
   orbitUiInstance.beginUpdate();
   try {
     let nextState = orbitUiInstance.buildControlsFromUnknown(ui);
@@ -2013,7 +2015,7 @@ function mergeRemoteOrbitState(baseState, remoteOrbit) {
         step: Number.isFinite(incoming.step) ? Number(incoming.step) : local.step
       };
     }
-    return next;
+    return sanitizeMergedOrbitState(baseState, next);
   }
 
   const positions = remoteOrbit.positions && typeof remoteOrbit.positions === 'object' ? remoteOrbit.positions : {};
@@ -2026,6 +2028,25 @@ function mergeRemoteOrbitState(baseState, remoteOrbit) {
       y: incoming && Number.isFinite(incoming.y) ? Number(incoming.y) : local.y,
       enabled: disabledPaths.has(path) ? false : local.enabled
     };
+  }
+  return sanitizeMergedOrbitState(baseState, next);
+}
+
+function sanitizeMergedOrbitState(baseState, mergedState) {
+  const next = {
+    ...mergedState,
+    center: {
+      x: Number(mergedState.center.x),
+      y: Number(mergedState.center.y)
+    }
+  };
+  // Guard against stale snapshots captured during transient invalid layout
+  // where center may collapse to (0,0). Keep current base center in that case.
+  const baseCenterX = Number(baseState.center?.x || 0);
+  const baseCenterY = Number(baseState.center?.y || 0);
+  if (next.center.x <= 1 && next.center.y <= 1 && baseCenterX > 20 && baseCenterY > 20) {
+    next.center.x = baseCenterX;
+    next.center.y = baseCenterY;
   }
   return next;
 }

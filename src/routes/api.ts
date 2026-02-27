@@ -136,6 +136,11 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
   }
 
+  function markUsed(sha1: string | null | undefined, weight: number = 1): void {
+    if (!sha1 || typeof sha1 !== 'string') return;
+    sessionManager.markSessionUsed(sha1, Date.now(), weight);
+  }
+
   function isLiveSessionId(id: string): boolean {
     return /^live-[0-9a-f]{40}$/.test(id);
   }
@@ -147,6 +152,47 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return cleaned;
     }
     return `${cleaned}.dsp`;
+  }
+
+  function splitBaseAndExt(filename: string): { base: string; ext: string } {
+    const ext = path.extname(filename) || '.dsp';
+    const base = path.basename(filename, ext) || 'session';
+    return { base, ext };
+  }
+
+  function chooseEditableFilename(targetDir: string, preferredFilename: string, sourceContent: Buffer): string {
+    const safePreferred = sanitizeEditableFilename(preferredFilename);
+    const { base, ext } = splitBaseAndExt(safePreferred);
+    const directPath = path.join(targetDir, safePreferred);
+    if (!fs.existsSync(directPath)) {
+      return safePreferred;
+    }
+    try {
+      const existing = fs.readFileSync(directPath);
+      if (Buffer.compare(existing, sourceContent) === 0) {
+        return safePreferred;
+      }
+    } catch {
+      // Ignore read errors and fallback to unique suffix strategy.
+    }
+
+    let n = 1;
+    while (true) {
+      const candidate = `${base}-${n}${ext}`;
+      const candidatePath = path.join(targetDir, candidate);
+      if (!fs.existsSync(candidatePath)) {
+        return candidate;
+      }
+      try {
+        const existing = fs.readFileSync(candidatePath);
+        if (Buffer.compare(existing, sourceContent) === 0) {
+          return candidate;
+        }
+      } catch {
+        // ignore and continue
+      }
+      n += 1;
+    }
   }
 
   function buildEditorUrl(editor: string, hostPath: string): string | null {
@@ -381,15 +427,40 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
 
   /**
    * GET /sessions
-   * Liste les sessions par ordre de création
-   * Query: ?limit=number
-   * Response: { sessions: Array<{ sha1, kind, filename, compilation_time }> }
+   * Liste les sessions par ordre demandé
+   * Query: ?limit=number&order=chronological|usage
+   * Response: { sessions: Array<{ sha1, kind, filename, compilation_time, last_used_time, usage_score }> }
    */
   router.get('/sessions', (req: Request, res: Response) => {
     const limitParam = req.query.limit;
     const limit = typeof limitParam === 'string' ? parseInt(limitParam, 10) : undefined;
-    const sessions = sessionManager.listSessionsByCreation(limit);
+    const orderParam = typeof req.query.order === 'string' ? req.query.order : 'chronological';
+    const sessions =
+      orderParam === 'usage'
+        ? sessionManager.listSessionsByUsage(limit)
+        : sessionManager.listSessionsByCreation(limit);
     res.json({ sessions });
+  });
+
+  /**
+   * POST /:sha/use
+   * Marque une session comme utilisée (usage réel côté UI).
+   * Body: { reason?: string, weight?: number }
+   */
+  router.post('/:sha/use', (req: Request, res: Response) => {
+    const { sha } = req.params;
+    if (!sessionManager.exists(sha)) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    const rawWeight = Number(req.body?.weight);
+    const weight = Number.isFinite(rawWeight) ? Math.max(0, Math.min(5, rawWeight)) : 1;
+    const ok = sessionManager.markSessionUsed(sha, Date.now(), weight);
+    if (!ok) {
+      res.status(500).json({ error: 'Failed to update last_used_time' });
+      return;
+    }
+    res.json({ success: true, sha1: sha, reason: req.body?.reason || null, weight });
   });
 
   /**
@@ -494,8 +565,9 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
 
     const safeName = sanitizeEditableFilename(session.filename || 'session.dsp');
-    const targetDir = path.join(liveWorkspaceRoot, 'faustforge-edit');
-    const targetFile = path.join(targetDir, `${sha}-${safeName}`);
+    const targetDir = liveWorkspaceRoot;
+    const targetName = chooseEditableFilename(targetDir, safeName, source);
+    const targetFile = path.join(targetDir, targetName);
 
     try {
       fs.mkdirSync(targetDir, { recursive: true });
@@ -516,11 +588,12 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
         sha1: liveSession.sha1,
         filename: liveSession.filename
       });
+      markUsed(liveSession.sha1, 3);
 
       let hostPath: string | undefined;
       let editorUrl: string | undefined;
       if (hostLiveWorkspaceRoot) {
-        hostPath = path.join(hostLiveWorkspaceRoot, 'faustforge-edit', `${sha}-${safeName}`);
+        hostPath = path.join(hostLiveWorkspaceRoot, targetName);
         const computedEditorUrl = buildEditorUrl(chosenEditor, hostPath);
         if (computedEditorUrl) {
           editorUrl = computedEditorUrl;
@@ -684,6 +757,9 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
 
     const next = stateStore.update(partial);
+    if (partial.view !== undefined) {
+      markUsed(next.sha1, 1);
+    }
     res.json(next);
   });
 
@@ -719,6 +795,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     try {
       clearSessionArtifacts(session.path);
       const result = await analyzeFaust(session.path, session.filename);
+      markUsed(session.sha1, 3);
       res.json({
         sha1: session.sha1,
         errors: result.errors
@@ -778,6 +855,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     const nextParams = mergeRunParamMaps(currentParams, { [paramPath]: incomingCell }, writer);
     const applied = nextParams[paramPath] || currentParams[paramPath] || { v: value, d: now, owner: null };
     const next = stateStore.update({ runParams: nextParams });
+    markUsed(next.sha1, 0);
     res.json({
       sha1: next.sha1,
       path: paramPath,
@@ -810,6 +888,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
         nonce: Date.now()
       }
     });
+    markUsed(next.sha1, 0);
     res.json({ sha1: next.sha1, runTransport: next.runTransport });
   });
 
@@ -840,6 +919,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
         nonce: Date.now()
       }
     });
+    markUsed(next.sha1, 0);
     res.json({ sha1: next.sha1, runTrigger: next.runTrigger });
   });
 
@@ -880,6 +960,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return;
     }
     const next = stateStore.update({ runPolyphony: safeVoices });
+    markUsed(next.sha1, 0);
     res.json({ sha1: next.sha1, voices: next.runPolyphony || 0 });
   });
 
@@ -922,6 +1003,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
         nonce: Date.now()
       }
     });
+    markUsed(next.sha1, 1);
     res.json({ sha1: next.sha1, runMidi: next.runMidi });
   });
 
@@ -1077,6 +1159,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
         res.status(400).json({ success: false, error: result.errors || 'C++ compilation failed' });
         return;
       }
+      markUsed(session.sha1, 3);
       res.json({ success: true, flags, errors: result.errors || '' });
     } catch (err) {
       console.error('Error in /compile/cpp:', err);
@@ -1106,6 +1189,9 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
 
     try {
       const result = await compileFaustWasm(session.path, session.filename);
+      if (result.success) {
+        markUsed(session.sha1, 3);
+      }
       res.json({
         success: result.success,
         errors: result.errors
@@ -1137,6 +1223,9 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
 
     try {
       const result = await compileFaustWasmRun(session.path, session.filename);
+      if (result.success) {
+        markUsed(session.sha1, 3);
+      }
       res.json({
         success: result.success,
         errors: result.errors
@@ -1192,6 +1281,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
 
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Content-Disposition', `attachment; filename="${session.filename}"`);
+    markUsed(session.sha1, 3);
     res.send(content);
   });
 
@@ -1216,6 +1306,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     const base = session.filename.replace(/\.dsp$/i, '') || 'session';
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Content-Disposition', `attachment; filename="${base}.cpp"`);
+    markUsed(session.sha1, 3);
     res.send(content);
   });
 
@@ -1238,6 +1329,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
 
     const base = session.filename.replace(/\.dsp$/i, '') || 'session';
+    markUsed(session.sha1, 3);
     res.download(result.archivePath, `${base}-svg.tar.gz`);
   });
 
@@ -1262,6 +1354,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     const base = session.filename.replace(/\.dsp$/i, '') || 'session';
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Content-Disposition', `attachment; filename="${base}-sig.dot"`);
+    markUsed(session.sha1, 3);
     res.send(content);
   });
 
@@ -1286,6 +1379,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     const base = session.filename.replace(/\.dsp$/i, '') || 'session';
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Content-Disposition', `attachment; filename="${base}.dsp.dot"`);
+    markUsed(session.sha1, 3);
     res.send(content);
   });
 
@@ -1314,6 +1408,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
 
     const base = session.filename.replace(/\.dsp$/i, '') || 'session';
+    markUsed(session.sha1, 3);
     res.download(result.archivePath, `${base}-pwa.tar.gz`);
   });
 

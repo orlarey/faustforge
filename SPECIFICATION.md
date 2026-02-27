@@ -2,25 +2,30 @@
 
 ## Scénario de référence
 
-Un programmeur Faust ouvre l’interface web de faustforge. À l’écran, la session est vide
-et un message central l’invite à déposer un fichier `.dsp`. Il fait un drag & drop
-ou clique pour sélectionner un fichier.
+Un programmeur Faust ouvre l’interface web de faustforge. Un overlay d’accueil
+(`WELCOME TO FAUSTFORGE`) apparaît au-dessus d’une session showcase dont les vues
+défilent automatiquement. Il clique sur **ENTER** pour déverrouiller l’audio
+(contrainte WebAudio du navigateur) et revenir à la session vide.
+
+À l’écran, la session est vide et un message central l’invite à déposer un fichier `.dsp`.
+Il fait un drag & drop ou colle du code.
 
 Le service calcule le SHA‑1 du contenu. Si une session avec ce SHA‑1 existe déjà,
 elle est réutilisée. Sinon, une session est créée et une analyse est lancée pour
 générer le C++ et les diagrammes SVG.
 
-Le programmeur navigue entre les vues **DSP**, **C++**, **Diagrams** et **Run**.
-La barre d’en‑tête permet de parcourir l’historique des sessions (ordre de création),
-de supprimer la session courante et de télécharger les artefacts correspondant à la
-vue affichée.
+Le programmeur navigue entre les vues **dsp**, **svg**, **run**, **cpp**, **tasks** et **signals**.
+La barre d’en‑tête permet de parcourir l’historique des sessions (flèches `◀/▶`),
+d’ouvrir un sélecteur de sessions (recherche + saut direct), de choisir l’ordre
+(`chronological` ou `usage`), de supprimer la session courante et de télécharger
+les artefacts correspondant à la vue affichée.
 
 Dans la vue **Run**, le DSP est compilé côté navigateur via FaustWASM pour produire
 l’interface utilisateur; l’audio peut ensuite être démarré/arrêté sans faire disparaître
 l’UI. Pour l’export, l’utilisateur peut télécharger l’application PWA (zip).
 
-Le cache de sessions est borné par une politique LRU: les sessions les moins récemment
-accédées sont supprimées lorsque la limite est atteinte.
+Par défaut, il n’y a pas de limite de sessions (`MAX_SESSIONS=0`).
+Une limite optionnelle peut être réactivée via configuration (`MAX_SESSIONS>0`).
 
 ## Scénario MCP (assistant IA)
 
@@ -36,7 +41,7 @@ l’utilisateur web.
    crée ou réutilise la session, puis déclenche l’analyse (C++/SVG).
 
 3. **Navigation / lecture**  
-   L’IA choisit la vue (DSP, C++, Diagrams, Run) et récupère le contenu correspondant
+   L’IA choisit la vue (`dsp`, `svg`, `run`, `cpp`, `tasks`, `signals`) et récupère le contenu correspondant
    pour analyse ou diagnostic.
 
 4. **Itération**  
@@ -81,9 +86,10 @@ Objectif : conserver le modèle immuable par SHA‑1 tout en supportant l’édi
    - sinon : recompiler et mettre à jour les artefacts de la session live
 
 2. Session active :
-   - par défaut, un `save` externe d’une session live non active **ne bascule pas** l’UI
-   - la session est marquée `updated` (badge/notification discrète)
-   - option possible : `autoSwitchOnExternalSave = true`
+   - avec `LIVE_AUTO_DISCOVER=1`, la découverte/modification d’un fichier `.dsp` peut
+     le rendre actif automatiquement dans l’UI
+   - avec `LIVE_AUTO_DISCOVER=0`, aucune bascule automatique n’est effectuée
+   - le bouton refresh manuel reste disponible
 
 3. Promotion live -> statique :
    - action utilisateur `freeze/promote`
@@ -161,10 +167,10 @@ Configuration MCP (extrait) :
 - **Session** : répertoire de travail identifié par le SHA‑1 du code soumis.
 - **SHA‑1** : empreinte hexadécimale de 40 caractères servant d’identifiant de session.
 - **Artefact** : fichier généré par le service (C++, SVG, WASM, webapp, zip).
-- **Vue** : mode d’affichage actif (DSP, C++, Diagrams, Run).
+- **Vue** : mode d’affichage actif (`dsp`, `svg`, `run`, `cpp`, `tasks`, `signals`).
 - **Webapp PWA** : application web générée par `faust2wasm-ts -pwa`.
 - **Téléchargement** : action permettant d’exporter l’artefact lié à la vue courante.
-- **Cache LRU** : politique de rétention par ordre d’accès récent.
+- **Cap de sessions** : limite optionnelle de rétention configurée par `MAX_SESSIONS`.
 
 ---
 
@@ -177,7 +183,7 @@ SHA1     = String[40]         -- empreinte hexadécimale
 Code     = String             -- code source Faust (UTF-8)
 Path     = String             -- chemin relatif dans la session
 Bytes    = ByteArray          -- données binaires
-View     = "dsp" | "cpp" | "svg" | "run"
+View     = "dsp" | "svg" | "run" | "cpp" | "tasks" | "signals"
 ```
 
 ### Modèle formel de synchronisation des paramètres Run
@@ -394,10 +400,10 @@ G⟦get⟧ : SHA1 × Path → Result<Bytes, NotFound>
 L⟦listSVG⟧ : SHA1 → Result<List<String>, NotFound>
 ```
 
-### O‑6 : Liste des sessions (ordre de création)
+### O‑6 : Liste des sessions (ordre configurable)
 
 ```text
-L⟦sessions⟧ : () → List<SessionMeta>
+L⟦sessions⟧ : (order?: "chronological" | "usage") → List<SessionMeta>
 ```
 
 ### O‑7 : Suppression d’une session
@@ -413,8 +419,10 @@ T⟦download⟧ : (SHA1 × View) → Result<Bytes, NotFound>
 
 Vue "dsp"  → user_code.dsp
 Vue "cpp"  → generated.cpp
-Vue "svg"  → zip(svg/)
-Vue "run"  → zip(webapp/)
+Vue "svg"  → tar.gz(svg/)
+Vue "run"  → tar.gz(webapp/)
+Vue "tasks" → tasks.dot
+Vue "signals" → signals.dot
 ```
 
 ### O‑8bis : Presets d’options de compilation C++ (vue cpp)
@@ -620,7 +628,7 @@ Préconditions :
   - Aucune
 
 Effets :
-  - Déplace la session courante vers la précédente (ordre de création)
+  - Déplace la session courante vers la précédente selon l’ordre UI actif
 
 Résultat :
   - sha1, filename de la session activée (null si session vide)
@@ -635,7 +643,7 @@ Préconditions :
   - Aucune
 
 Effets :
-  - Déplace la session courante vers la suivante (ordre de création) ou session vide
+  - Déplace la session courante vers la suivante selon l’ordre UI actif, ou session vide
 
 Résultat :
   - sha1, filename de la session activée (null si session vide)
@@ -763,7 +771,7 @@ mcp.midi_note_pulse : (note: Int[0..127], velocity?: Number[0..1], holdMs?: Int[
 
 Préconditions :
   - Une session active en état partagé
-  - Audio déverrouillé (Enable Audio validé dans l’UI)
+  - Audio déverrouillé (clic **ENTER** validé dans l’UI)
 
 Effets :
   - Force la vue partagée sur "run"
@@ -882,8 +890,8 @@ Le protocole MCP n’expose pas d’opération de suppression.
 
 ## Comportement UI (synthèse)
 
-- **Session vide** : message central “Drop a .dsp file here”, clic pour sélectionner un fichier.
-- **Navigation** : précédent/suivant par ordre de création.
+- **Session vide** : message central “Drop a .dsp file here”, création par drop ou paste.
+- **Navigation** : précédent/suivant selon l’ordre actif (`chronological` ou `usage`).
 - **Run** : compilation côté navigateur via FaustWASM (libfaust‑wasm servi localement) ;
   l’UI reste visible quand l’audio est arrêté.
 - **Compromis d’exécution** : les artefacts d’analyse (C++, SVG, PWA) sont générés côté serveur,

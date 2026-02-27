@@ -71,8 +71,13 @@ HOST_LIVE_WORKSPACE_ROOT -- chemin équivalent côté hôte (ex: /Users/me/faust
 Règle:
 
 ```text
-containerPath = LIVE_WORKSPACE_ROOT + "/faustforge-edit/" + sourceSha1 + "-" + safeFilename
-hostPath      = HOST_LIVE_WORKSPACE_ROOT + "/faustforge-edit/" + sourceSha1 + "-" + safeFilename
+containerPath = LIVE_WORKSPACE_ROOT + "/" + targetFilename
+hostPath      = HOST_LIVE_WORKSPACE_ROOT + "/" + targetFilename
+
+targetFilename:
+  - `filename.dsp` si absent,
+  - sinon `filename.dsp` si contenu identique,
+  - sinon `filename-1.dsp`, `filename-2.dsp`, ... (premier nom libre ou de contenu identique).
 ```
 
 ## Invariants
@@ -147,9 +152,9 @@ Response:
   "sourceSha1": "<sha1 static>",
   "liveSha1": "live-<sha1>",
   "filename": "my.dsp",
-  "containerPath": "/workspace/faustforge-edit/<sha1>-my.dsp",
-  "hostPath": "/Users/me/faust-workspace/faustforge-edit/<sha1>-my.dsp",
-  "editorUrl": "vscode://file//Users/me/faust-workspace/faustforge-edit/<sha1>-my.dsp",
+  "containerPath": "/workspace/my.dsp",
+  "hostPath": "/Users/me/faust-workspace/my.dsp",
+  "editorUrl": "vscode://file//Users/me/faust-workspace/my.dsp",
   "openEditorRequested": true
 }
 ```

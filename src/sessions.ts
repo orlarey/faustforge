@@ -11,6 +11,8 @@ export interface SessionMeta {
   content_sha1?: string;
   filename: string;
   compilation_time: number;
+  last_used_time?: number;
+  usage_score?: number;
 }
 
 export interface Session {
@@ -25,6 +27,8 @@ export interface SessionSummary {
   live_draft?: boolean;
   filename: string;
   compilation_time: number;
+  last_used_time?: number;
+  usage_score?: number;
   source_path?: string;
   source_mtime_ms?: number;
   content_sha1?: string;
@@ -39,9 +43,9 @@ export class SessionManager {
   private lruOrder: string[] = []; // ordre d'accès, plus récent à la fin
   private creationOrder: string[] = []; // ordre de création, plus ancien au début
 
-  constructor(sessionsDir: string, maxSessions: number = 50) {
+  constructor(sessionsDir: string, maxSessions: number = 0) {
     this.sessionsDir = sessionsDir;
-    this.maxSessions = maxSessions;
+      this.maxSessions = Number.isFinite(maxSessions) && maxSessions > 0 ? maxSessions : 0;
 
     // Créer le répertoire sessions s'il n'existe pas
     if (!fs.existsSync(sessionsDir)) {
@@ -133,7 +137,15 @@ export class SessionManager {
               kind,
               live_draft: metadata.live_draft === true,
               filename: metadata.filename,
-              compilation_time: metadata.compilation_time
+              compilation_time: metadata.compilation_time,
+              last_used_time:
+                typeof metadata.last_used_time === 'number' && Number.isFinite(metadata.last_used_time)
+                  ? metadata.last_used_time
+                  : metadata.compilation_time,
+              usage_score:
+                typeof metadata.usage_score === 'number' && Number.isFinite(metadata.usage_score)
+                  ? metadata.usage_score
+                  : 0
             });
           } catch {
             // Ignorer les sessions mal formées
@@ -207,6 +219,9 @@ export class SessionManager {
    * Évicte les sessions les plus anciennes si nécessaire
    */
   private evict(): void {
+    if (!this.maxSessions || this.maxSessions <= 0) {
+      return;
+    }
     while (this.lruOrder.length > this.maxSessions) {
       const oldest = this.lruOrder.shift();
       if (oldest) {
@@ -255,7 +270,9 @@ export class SessionManager {
       sha1,
       kind: 'static',
       filename,
-      compilation_time: Date.now()
+      compilation_time: Date.now(),
+      last_used_time: Date.now(),
+      usage_score: 0
     };
     fs.writeFileSync(
       path.join(sessionPath, 'metadata.json'),
@@ -298,11 +315,19 @@ export class SessionManager {
     const metadataPath = path.join(sessionPath, 'metadata.json');
 
     let existingCompilationTime: number | null = null;
+    let existingLastUsedTime: number | null = null;
+    let existingUsageScore: number | null = null;
     if (fs.existsSync(metadataPath)) {
       try {
         const prev: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
         if (typeof prev.compilation_time === 'number' && Number.isFinite(prev.compilation_time)) {
           existingCompilationTime = prev.compilation_time;
+        }
+        if (typeof prev.last_used_time === 'number' && Number.isFinite(prev.last_used_time)) {
+          existingLastUsedTime = prev.last_used_time;
+        }
+        if (typeof prev.usage_score === 'number' && Number.isFinite(prev.usage_score)) {
+          existingUsageScore = prev.usage_score;
         }
       } catch {
         // ignore malformed previous metadata
@@ -324,7 +349,9 @@ export class SessionManager {
       source_mtime_ms: sourceStats.mtimeMs,
       content_sha1: sourceSha,
       filename,
-      compilation_time: existingCompilationTime ?? Date.now()
+      compilation_time: existingCompilationTime ?? Date.now(),
+      last_used_time: existingLastUsedTime ?? Date.now(),
+      usage_score: existingUsageScore ?? 0
     };
     fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
 
@@ -406,6 +433,14 @@ export class SessionManager {
           live_draft: metadata.live_draft === true,
           filename: metadata.filename,
           compilation_time: metadata.compilation_time,
+          last_used_time:
+            typeof metadata.last_used_time === 'number' && Number.isFinite(metadata.last_used_time)
+              ? metadata.last_used_time
+              : metadata.compilation_time,
+          usage_score:
+            typeof metadata.usage_score === 'number' && Number.isFinite(metadata.usage_score)
+              ? metadata.usage_score
+              : 0,
           source_path: metadata.source_path,
           source_mtime_ms: metadata.source_mtime_ms,
           content_sha1: metadata.content_sha1
@@ -548,6 +583,14 @@ export class SessionManager {
           live_draft: metadata.live_draft === true,
           filename: metadata.filename,
           compilation_time: metadata.compilation_time,
+          last_used_time:
+            typeof metadata.last_used_time === 'number' && Number.isFinite(metadata.last_used_time)
+              ? metadata.last_used_time
+              : metadata.compilation_time,
+          usage_score:
+            typeof metadata.usage_score === 'number' && Number.isFinite(metadata.usage_score)
+              ? metadata.usage_score
+              : 0,
           source_path: metadata.source_path,
           source_mtime_ms: metadata.source_mtime_ms,
           content_sha1: metadata.content_sha1
@@ -560,6 +603,66 @@ export class SessionManager {
       return summaries.slice(-limit);
     }
     return summaries;
+  }
+
+  /**
+   * Liste des sessions triées par usage (MRU): plus récemment utilisée en premier.
+   */
+  listSessionsByLastUsed(limit?: number): SessionSummary[] {
+    const sessions = this.listSessionsByCreation();
+    sessions.sort((a, b) => {
+      const aLast = typeof a.last_used_time === 'number' ? a.last_used_time : a.compilation_time;
+      const bLast = typeof b.last_used_time === 'number' ? b.last_used_time : b.compilation_time;
+      if (aLast !== bLast) return bLast - aLast;
+      return b.compilation_time - a.compilation_time;
+    });
+    if (limit && limit > 0) {
+      return sessions.slice(0, limit);
+    }
+    return sessions;
+  }
+
+  /**
+   * Liste des sessions triées par score d'usage cumulé.
+   */
+  listSessionsByUsage(limit?: number): SessionSummary[] {
+    const sessions = this.listSessionsByCreation();
+    sessions.sort((a, b) => {
+      const aScore = typeof a.usage_score === 'number' ? a.usage_score : 0;
+      const bScore = typeof b.usage_score === 'number' ? b.usage_score : 0;
+      if (aScore !== bScore) return bScore - aScore;
+      const aLast = typeof a.last_used_time === 'number' ? a.last_used_time : a.compilation_time;
+      const bLast = typeof b.last_used_time === 'number' ? b.last_used_time : b.compilation_time;
+      if (aLast !== bLast) return bLast - aLast;
+      return b.compilation_time - a.compilation_time;
+    });
+    if (limit && limit > 0) {
+      return sessions.slice(0, limit);
+    }
+    return sessions;
+  }
+
+  /**
+   * Marque une session comme utilisée (usage réel, pas simple sélection).
+   */
+  markSessionUsed(sha1: string, when: number = Date.now(), weight: number = 1): boolean {
+    if (!this.exists(sha1)) return false;
+    const metadataPath = path.join(this.sessionsDir, sha1, 'metadata.json');
+    try {
+      const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      metadata.last_used_time = when;
+      const currentScore =
+        typeof metadata.usage_score === 'number' && Number.isFinite(metadata.usage_score)
+          ? metadata.usage_score
+          : 0;
+      const inc = Number.isFinite(weight) ? Math.max(0, weight) : 0;
+      metadata.usage_score = currentScore + inc;
+      fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+      this.touch(sha1);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

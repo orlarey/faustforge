@@ -111,11 +111,11 @@ Then open `http://localhost:3000`.
 
 ### 1) Open faustforge
 
-Open `http://localhost:3000`. The first thing before using FAUSTFORGE is to enable audio by clicking the **Enable Audio** button. This step is required because web browsers block audio playback until the user explicitly allows it (Web Audio API security policy).
+Open `http://localhost:3000`. On startup, faustforge shows a welcome overlay with a rotating showcase session in the background. Click **ENTER** to unlock audio for the current browser tab (required by Web Audio API security policy) and switch to the **Empty** session.
 
 ![Home](docs/screenshots/01-home-page-unlock.png)
 
-Once audio is enabled, you can start creating sessions by dropping Faust files.
+Once audio is unlocked, you can start creating sessions by dropping Faust files.
 
 ![Home](docs/screenshots/01-home.png)
 
@@ -154,6 +154,11 @@ Operational notes:
 You can navigate between sessions using the left and right arrows, and between views using the up and down arrows or the view menu.
 
 - Sessions: `◀` / `▶`
+- Click the session label to open the session picker popup (direct jump + search).
+- Session picker order modes:
+  - `⏱ Chronological`: newest at top, oldest at bottom.
+  - `★ Usage`: highest cumulative usage score first.
+- The current session is marked with a checkmark in the popup.
 - Views menu order: `dsp`, `svg`, `run`, `cpp`, `tasks`, `signals`
 - Keyboard shortcuts:
   - `←` / `→`: previous/next session
@@ -237,11 +242,13 @@ If SVG rendering fails (typically because the graph is too large), faustforge di
 - **Refresh** (`↻`): regenerates all session artifacts (C++, SVG, graphs) from the current Faust source. Use this after editing the `.dsp` code.
 - **Download**: exports the content of the current view. The exported format depends on the active view:
   - `dsp` → `<name>.dsp` (Faust source)
-  - `svg` → `<name>.svg` (block diagram)
+  - `svg` → `<name>-svg.tar.gz` (SVG export bundle)
   - `cpp` → `<name>.cpp` (generated C++ code)
-  - `tasks` → `<name>-tg.dot` (tasks graph in DOT format)
+  - `tasks` → `<name>.dsp.dot` (tasks graph in DOT format)
   - `signals` → `<name>-sig.dot` (signals graph in DOT format)
+  - `run` → `<name>-pwa.tar.gz` (generated runnable web app bundle)
 - **Delete**: deletes the current session and all its associated artifacts. The next available session is automatically selected.
+- **Edit** (`✎`, static sessions only): copies the static source into the live shared workspace root and opens the host editor URL when available (for example `vscode://file/...`).
 - **Archive**: downloads all sessions as a single `.tar.gz` archive. This is useful for backing up your work or transferring sessions to another machine.
 
 ## Build Locally (Maintainers)
@@ -268,6 +275,7 @@ The helper script uses:
 - `HOST_LIVE_WORKSPACE_ROOT` (optional, host path matching `LIVE_WORKSPACE_ROOT`, needed for `Edit` button editor URL)
 - `LIVE_SCAN_INTERVAL_MS` (optional, default `1500`)
 - `LIVE_IGNORE_DIRS` (optional CSV list, example: `.git,node_modules,build`)
+- `MAX_SESSIONS` (optional, default `0` = unlimited; set `>0` to re-enable cap/eviction)
 
 You can still use the raw scripts directly:
 - `./scripts/rebuild.sh`
@@ -384,7 +392,7 @@ Audio quality quick interpretation (practical thresholds):
 - `peakDbFSQ >= -1` with high `clipRatioQ` -> limiter/saturation region.
 
 Browser note:
-- On page open, faustforge requires an explicit `Enable Audio` click to unlock WebAudio in this tab.
+- On page open, faustforge requires an explicit `ENTER` click to unlock WebAudio in this tab.
 - MCP audio tools (`run_transport start/toggle`, trigger/capture tools) are blocked until this unlock step is done.
 
 Parameter behavior:
