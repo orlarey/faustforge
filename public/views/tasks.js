@@ -2,6 +2,7 @@
  * Purpose: Define the Tasks view that displays a Faust task graph from DOT data.
  * How: Fetches `tasks.dot`, renders it through viz.js as SVG, and provides a DOT fallback/editor view.
  */
+import { escapeHtml, generateLineNumbers } from './shared/text-utils.js';
 
 let vizScriptsPromise = null;
 const VIZ_TOTAL_MEMORY = 512 * 1024 * 1024; // 512 MB
@@ -12,17 +13,6 @@ const VIZ_TOTAL_MEMORY = 512 * 1024 * 1024; // 512 MB
  */
 export function getName() {
   return 'Tasks';
-}
-
-/**
- * Purpose: Sanitize plain text before inserting it in HTML.
- * How: Replaces reserved characters with HTML entities to prevent markup injection.
- */
-function escapeHtml(text) {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 /**
@@ -85,18 +75,6 @@ function highlightDot(dot) {
   }
 
   return result;
-}
-
-/**
- * Purpose: Build the gutter content for DOT line numbers.
- * How: Generates numbers from 1..N and joins them with newlines for a single text block.
- */
-function generateLineNumbers(lineCount) {
-  const lines = [];
-  for (let i = 1; i <= lineCount; i++) {
-    lines.push(i);
-  }
-  return lines.join('\n');
 }
 
 /**

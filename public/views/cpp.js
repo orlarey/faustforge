@@ -2,6 +2,7 @@
  * Purpose: Define the generated C++ source view.
  * How: Fetches compiled C++ output, highlights syntax, and offers flags presets/help with scroll persistence.
  */
+import { escapeHtml, generateLineNumbers } from './shared/text-utils.js';
 
 /**
  * Purpose: Expose the label used by the global view selector.
@@ -94,29 +95,6 @@ function highlightCpp(code) {
   }
 
   return result;
-}
-
-/**
- * Purpose: Sanitize plain text before HTML insertion.
- * How: Replaces reserved characters with HTML entities.
- */
-function escapeHtml(text) {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-/**
- * Purpose: Build the line-number gutter content.
- * How: Generates numbers from 1..N and joins them with newlines.
- */
-function generateLineNumbers(lineCount) {
-  const lines = [];
-  for (let i = 1; i <= lineCount; i++) {
-    lines.push(i);
-  }
-  return lines.join('\n');
 }
 
 const CPP_PRESETS_STORAGE_KEY = 'faustforge.cpp.presets.v1';
