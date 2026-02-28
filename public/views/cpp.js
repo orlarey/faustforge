@@ -3,6 +3,7 @@
  * How: Fetches compiled C++ output, highlights syntax, and offers flags presets/help with scroll persistence.
  */
 import { escapeHtml, generateLineNumbers } from './shared/text-utils.js';
+import { setupCodeEditorInteractions } from './shared/code-editor-view.js';
 
 /**
  * Purpose: Expose the label used by the global view selector.
@@ -294,7 +295,6 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
       </div>
     `;
 
-    // Keep line numbers and code scroll in sync.
     const lineNumbers = container.querySelector('.line-numbers');
     const codeContent = container.querySelector('.code-content');
     const flagsInput = container.querySelector('.code-flags-input');
@@ -307,111 +307,17 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
     const helpClose = container.querySelector('.code-help-close');
 
     const zoomSelect = container.querySelector('.code-zoom-select');
-    const baseLineNumbersFontSize = parseFloat(getComputedStyle(lineNumbers).fontSize) || 14;
-    const baseCodeFontSize = parseFloat(getComputedStyle(codeContent).fontSize) || 14;
-
-    let lineHeight =
-      (lineNumbers.scrollHeight && lineCount
-        ? lineNumbers.scrollHeight / lineCount
-        : parseFloat(getComputedStyle(codeContent).lineHeight)) || 16;
-    const scroller = codeContent;
-    let restoring = true;
-
-    /**
-     * Purpose: Mirror code scrolling into the line-number gutter.
-     * How: Copies the code panel `scrollTop` to the gutter.
-     */
-    const syncScroll = () => {
-      if (scroller === codeContent) {
-        lineNumbers.scrollTop = codeContent.scrollTop;
-      }
-    };
-
-    /**
-     * Purpose: Compute which source line is currently at the top of the viewport.
-     * How: Converts `scrollTop` to a 1-based line index using measured line height.
-     */
-    const getTopLine = () => Math.floor(codeContent.scrollTop / lineHeight) + 1;
-
-    /**
-     * Purpose: Persist user scroll position to the parent app state.
-     * How: Emits the current top line through `onScrollChange` when not restoring state.
-     */
-    const capture = () => {
-      if (restoring) return;
-      if (typeof onScrollChange === 'function') {
-        onScrollChange(getTopLine());
-      }
-    };
-
-    scroller.addEventListener('scroll', () => {
-      syncScroll();
-      capture();
+    const { getTopLine } = setupCodeEditorInteractions({
+      lineNumbersEl: lineNumbers,
+      codeContentEl: codeContent,
+      zoomSelectEl: zoomSelect,
+      lineCount,
+      scrollState,
+      onScrollChange,
+      minZoom: 50,
+      maxZoom: 200,
+      defaultZoom: 100
     });
-
-    /**
-     * Purpose: Restore the code view so a given line appears at the top.
-     * How: Computes target scroll offset and applies small corrective passes across animation frames.
-     */
-    const applyTopLine = (line) => {
-      if (typeof line !== 'number') return;
-      const maxScroll = scroller.scrollHeight - scroller.clientHeight;
-      const target = Math.max(0, Math.min(maxScroll, (line - 1) * lineHeight));
-
-      /**
-       * Purpose: Correct residual top-line drift after layout updates.
-       * How: Re-reads visible line index and adjusts `scrollTop` for a few bounded attempts.
-       */
-      const applyWithCorrection = (attempt = 0) => {
-        codeContent.scrollTop = target;
-        syncScroll();
-        requestAnimationFrame(() => {
-          const currentTop = getTopLine();
-          const diff = line - currentTop;
-          if (diff !== 0 && attempt < 3) {
-            const corrected = Math.max(
-              0,
-              Math.min(maxScroll, codeContent.scrollTop + diff * lineHeight)
-            );
-            codeContent.scrollTop = corrected;
-            syncScroll();
-            requestAnimationFrame(() => applyWithCorrection(attempt + 1));
-            return;
-          }
-        });
-      };
-
-      applyWithCorrection();
-    };
-
-    /**
-     * Purpose: Refresh the measured line height used for scroll math.
-     * How: Derives it from rendered gutter metrics and falls back to computed styles.
-     */
-    const refreshLineHeight = () => {
-      lineHeight =
-        (lineNumbers.scrollHeight && lineCount
-          ? lineNumbers.scrollHeight / lineCount
-          : parseFloat(getComputedStyle(codeContent).lineHeight)) || lineHeight || 16;
-    };
-
-    /**
-     * Purpose: Apply editor zoom while preserving reading position.
-     * How: Scales font sizes, recomputes line height, then restores the previous top line.
-     */
-    const applyZoom = (zoom) => {
-      const factor = Math.max(50, Math.min(200, Number(zoom) || 100)) / 100;
-      const topLine = getTopLine();
-      lineNumbers.style.fontSize = `${(baseLineNumbersFontSize * factor).toFixed(2)}px`;
-      codeContent.style.fontSize = `${(baseCodeFontSize * factor).toFixed(2)}px`;
-      refreshLineHeight();
-      applyTopLine(topLine);
-    };
-
-    if (zoomSelect) {
-      zoomSelect.addEventListener('change', () => applyZoom(parseInt(zoomSelect.value, 10)));
-    }
-    applyZoom(100);
 
     /**
      * Purpose: Display the current flags operation status in the toolbar.
@@ -505,28 +411,6 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
       helpClose.addEventListener('click', () => {
         helpPanel.classList.add('hidden');
       });
-    }
-
-    if (scrollState && typeof scrollState.line === 'number') {
-      let attempts = 0;
-      /**
-       * Purpose: Wait until layout is stable before restoring saved scroll.
-       * How: Retries on animation frames until content becomes scrollable or a max attempt threshold is reached.
-       */
-      const settle = () => {
-        attempts += 1;
-        if (codeContent.scrollHeight > codeContent.clientHeight || attempts >= 5) {
-          applyTopLine(scrollState.line);
-          requestAnimationFrame(() => {
-            restoring = false;
-          });
-          return;
-        }
-        requestAnimationFrame(settle);
-      };
-      requestAnimationFrame(settle);
-    } else {
-      restoring = false;
     }
 
   } catch (err) {
