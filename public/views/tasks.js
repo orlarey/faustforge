@@ -1,15 +1,23 @@
 /**
- * Vue Tasks (DOT)
- * Rend le graphe de tâches Faust via viz.js
+ * Purpose: Define the Tasks view that displays a Faust task graph from DOT data.
+ * How: Fetches `tasks.dot`, renders it through viz.js as SVG, and provides a DOT fallback/editor view.
  */
 
 let vizScriptsPromise = null;
 const VIZ_TOTAL_MEMORY = 512 * 1024 * 1024; // 512 MB
 
+/**
+ * Purpose: Expose the label used by the global view selector.
+ * How: Returns the static display name for this module.
+ */
 export function getName() {
   return 'Tasks';
 }
 
+/**
+ * Purpose: Sanitize plain text before inserting it in HTML.
+ * How: Replaces reserved characters with HTML entities to prevent markup injection.
+ */
 function escapeHtml(text) {
   return text
     .replace(/&/g, '&amp;')
@@ -17,10 +25,18 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;');
 }
 
+/**
+ * Purpose: Render DOT source with lightweight syntax highlighting.
+ * How: Escapes the source, wraps token classes with placeholders, then restores highlighted HTML spans.
+ */
 function highlightDot(dot) {
   const tokens = [];
   let tokenId = 0;
 
+  /**
+   * Purpose: Protect already-highlighted fragments from later regex passes.
+   * How: Stores fragment HTML in a token table and returns a unique placeholder marker.
+   */
   function placeholder(html) {
     const id = `__DOT_TOKEN_${tokenId++}__`;
     tokens.push({ id, html });
@@ -71,6 +87,10 @@ function highlightDot(dot) {
   return result;
 }
 
+/**
+ * Purpose: Build the gutter content for DOT line numbers.
+ * How: Generates numbers from 1..N and joins them with newlines for a single text block.
+ */
 function generateLineNumbers(lineCount) {
   const lines = [];
   for (let i = 1; i <= lineCount; i++) {
@@ -79,6 +99,10 @@ function generateLineNumbers(lineCount) {
   return lines.join('\n');
 }
 
+/**
+ * Purpose: Render the DOT text panel in editor-like layout.
+ * How: Injects line numbers + highlighted code and keeps the number gutter synced on scroll.
+ */
 function renderDotViewer(dotRoot, dot) {
   const lineCount = dot.split('\n').length;
   dotRoot.innerHTML = `
@@ -94,6 +118,10 @@ function renderDotViewer(dotRoot, dot) {
   });
 }
 
+/**
+ * Purpose: Convert viz.js errors into a user-facing message.
+ * How: Detects memory/complexity failures and falls back to a concise title/detail structure.
+ */
 function getRenderFailureMessage(err) {
   const raw =
     err && typeof err === 'object' && 'message' in err ? String(err.message || '') : String(err || '');
@@ -116,6 +144,10 @@ function getRenderFailureMessage(err) {
   };
 }
 
+/**
+ * Purpose: Load an external script exactly once.
+ * How: Reuses an existing `<script data-src>` when present, otherwise creates one and resolves on load.
+ */
 async function loadScriptOnce(src) {
   return new Promise((resolve, reject) => {
     const existing = document.querySelector(`script[data-src="${src}"]`);
@@ -144,6 +176,10 @@ async function loadScriptOnce(src) {
   });
 }
 
+/**
+ * Purpose: Ensure viz.js renderer is available before graph rendering.
+ * How: Initializes Emscripten memory hints, loads viz scripts once, and returns `window.Viz`.
+ */
 async function ensureViz() {
   if (window.Viz) return window.Viz;
   if (!vizScriptsPromise) {
@@ -166,6 +202,10 @@ async function ensureViz() {
   return vizScriptsPromise;
 }
 
+/**
+ * Purpose: Render the Tasks view for the current session.
+ * How: Fetches DOT, builds the split UI (graph + source), renders SVG via viz.js, and handles fallbacks.
+ */
 export async function render(container, { sha, onError, onClearError }) {
   let dot = '';
   try {
@@ -226,12 +266,20 @@ export async function render(container, { sha, onError, onClearError }) {
   let baseHeight = 0;
 
   renderDotViewer(dotPre, dot);
+  /**
+   * Purpose: Apply the current split ratio between graph and DOT panels.
+   * How: Clamps split percentage and updates panel flex-basis values.
+   */
   function applySplit() {
     const safe = Math.max(15, Math.min(85, splitPercent));
     containerEl.style.flex = `0 0 ${safe}%`;
     dotPre.style.flex = '1 1 auto';
   }
 
+  /**
+   * Purpose: Toggle split mode visibility for the DOT panel.
+   * How: Adds/removes classes and resets flex values depending on current visibility.
+   */
   function setDotVisible(visible) {
     if (visible) {
       dotPre.classList.remove('hidden');
@@ -253,12 +301,20 @@ export async function render(container, { sha, onError, onClearError }) {
 
   splitter.addEventListener('mousedown', (event) => {
     event.preventDefault();
+    /**
+     * Purpose: Update split ratio while dragging the splitter.
+     * How: Maps pointer Y position to a percentage of the main panel height.
+     */
     const onMove = (moveEvent) => {
       const rect = mainEl.getBoundingClientRect();
       if (!rect.height) return;
       splitPercent = ((moveEvent.clientY - rect.top) / rect.height) * 100;
       applySplit();
     };
+    /**
+     * Purpose: Stop splitter drag behavior after mouse release.
+     * How: Removes temporary move/up listeners from the window.
+     */
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
@@ -267,6 +323,10 @@ export async function render(container, { sha, onError, onClearError }) {
     window.addEventListener('mouseup', onUp);
   });
 
+  /**
+   * Purpose: Compute automatic zoom that fits SVG inside available space.
+   * How: Measures base SVG size and container size, then returns a bounded fit percentage.
+   */
   function computeFitZoom() {
     const svg = content.querySelector('svg');
     if (!svg) return zoom;
@@ -285,6 +345,10 @@ export async function render(container, { sha, onError, onClearError }) {
     return Math.max(10, Math.round(fitRatio * 100));
   }
 
+  /**
+   * Purpose: Apply current zoom mode to the rendered SVG.
+   * How: Resolves auto/manual zoom, scales width/height, and toggles auto-centering styling.
+   */
   function applyZoom() {
     const svg = content.querySelector('svg');
     if (!svg) return;
@@ -351,4 +415,8 @@ export async function render(container, { sha, onError, onClearError }) {
   }
 }
 
+/**
+ * Purpose: Release Tasks view resources on teardown.
+ * How: No-op because this view currently has no persistent resources to clean up.
+ */
 export function dispose() {}

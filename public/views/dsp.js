@@ -1,14 +1,17 @@
 /**
- * Vue Code DSP
- * Affiche le code source Faust avec numéros de ligne et coloration syntaxique
- * Inspiré de faustservice
+ * Purpose: Define the DSP source view.
+ * How: Fetches `user_code.dsp`, highlights Faust syntax, and renders synchronized line-number scrolling.
  */
 
+/**
+ * Purpose: Expose the label used by the global view selector.
+ * How: Returns the static display name for this module.
+ */
 export function getName() {
   return 'DSP Code';
 }
 
-// Mots-clés Faust
+// Faust language keywords used by the syntax highlighter.
 const FAUST_KEYWORDS = [
   'import', 'declare', 'process', 'with', 'letrec', 'where',
   'library', 'component', 'environment', 'inputs', 'outputs',
@@ -16,7 +19,7 @@ const FAUST_KEYWORDS = [
   'case', 'seq', 'par', 'sum', 'prod'
 ];
 
-// Fonctions Faust courantes
+// Common Faust functions used by the syntax highlighter.
 const FAUST_FUNCTIONS = [
   'button', 'checkbox', 'hslider', 'vslider', 'nentry',
   'hgroup', 'vgroup', 'tgroup', 'hbargraph', 'vbargraph',
@@ -28,50 +31,54 @@ const FAUST_FUNCTIONS = [
 ];
 
 /**
- * Applique la coloration syntaxique Faust en utilisant des tokens
+ * Purpose: Apply lightweight Faust syntax highlighting on source text.
+ * How: Escapes HTML, replaces token categories with placeholders, then restores styled HTML spans.
  */
 function highlightFaust(code) {
   const tokens = [];
   let tokenId = 0;
 
-  // Fonction pour créer un placeholder unique
+  /**
+   * Purpose: Protect highlighted fragments from later regex passes.
+   * How: Stores fragment HTML in a token table and returns a unique placeholder marker.
+   */
   function placeholder(html) {
     const id = `__TOKEN_${tokenId++}__`;
     tokens.push({ id, html });
     return id;
   }
 
-  // Échapper HTML d'abord
+  // Escape HTML first.
   let result = escapeHtml(code);
 
-  // 1. Commentaires // (les protéger en premier)
+  // 1. Line comments (protect first).
   result = result.replace(/(\/\/[^\n]*)/g, (match) => {
     return placeholder(`<span class="faust-comment">${match}</span>`);
   });
 
-  // 2. Chaînes de caractères
+  // 2. String literals.
   result = result.replace(/("(?:[^"\\]|\\.)*")/g, (match) => {
     return placeholder(`<span class="faust-string">${match}</span>`);
   });
 
-  // 3. Nombres
+  // 3. Numeric literals.
   result = result.replace(/\b(\d+\.?\d*(?:e[+-]?\d+)?)\b/gi, (match) => {
     return placeholder(`<span class="faust-number">${match}</span>`);
   });
 
-  // 4. Mots-clés
+  // 4. Keywords.
   const keywordPattern = new RegExp(`\\b(${FAUST_KEYWORDS.join('|')})\\b`, 'g');
   result = result.replace(keywordPattern, (match) => {
     return placeholder(`<span class="faust-keyword">${match}</span>`);
   });
 
-  // 5. Fonctions
+  // 5. Built-in functions.
   const functionPattern = new RegExp(`\\b(${FAUST_FUNCTIONS.join('|')})\\b`, 'g');
   result = result.replace(functionPattern, (match) => {
     return placeholder(`<span class="faust-function">${match}</span>`);
   });
 
-  // Restaurer tous les tokens
+  // Restore all placeholder tokens.
   for (const token of tokens) {
     result = result.replace(token.id, token.html);
   }
@@ -80,7 +87,8 @@ function highlightFaust(code) {
 }
 
 /**
- * Échappe les caractères HTML
+ * Purpose: Sanitize plain text before HTML insertion.
+ * How: Replaces reserved characters with HTML entities.
  */
 function escapeHtml(text) {
   return text
@@ -90,7 +98,8 @@ function escapeHtml(text) {
 }
 
 /**
- * Génère les numéros de ligne
+ * Purpose: Build the line-number gutter content.
+ * How: Generates numbers from 1..N and joins them with newlines.
  */
 function generateLineNumbers(lineCount) {
   const lines = [];
@@ -100,6 +109,10 @@ function generateLineNumbers(lineCount) {
   return lines.join('\n');
 }
 
+/**
+ * Purpose: Render the DSP code pane for one session.
+ * How: Loads source code, injects highlighted HTML, and maintains zoom/scroll synchronization state.
+ */
 export async function render(container, { sha, scrollState, onScrollChange }) {
   try {
     const response = await fetch(`/api/${sha}/user_code.dsp`);
@@ -137,7 +150,7 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
       </div>
     `;
 
-    // Synchroniser le scroll
+    // Keep line numbers and code scroll in sync.
     const lineNumbers = container.querySelector('.line-numbers');
     const codeContent = container.querySelector('.code-content');
     const zoomSelect = container.querySelector('.code-zoom-select');
@@ -151,14 +164,26 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
     const scroller = codeContent;
     let restoring = true;
 
+    /**
+     * Purpose: Mirror code scrolling into the line-number gutter.
+     * How: Copies the code panel `scrollTop` to the gutter.
+     */
     const syncScroll = () => {
       if (scroller === codeContent) {
         lineNumbers.scrollTop = codeContent.scrollTop;
       }
     };
 
+    /**
+     * Purpose: Compute which source line is currently at the top of the viewport.
+     * How: Converts `scrollTop` to a 1-based line index using measured line height.
+     */
     const getTopLine = () => Math.floor(codeContent.scrollTop / lineHeight) + 1;
 
+    /**
+     * Purpose: Persist user scroll position to the parent app state.
+     * How: Emits the current top line through `onScrollChange` when not restoring state.
+     */
     const capture = () => {
       if (restoring) return;
       if (typeof onScrollChange === 'function') {
@@ -171,11 +196,19 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
       capture();
     });
 
+    /**
+     * Purpose: Restore the code view so a given line appears at the top.
+     * How: Computes target scroll offset and applies small corrective passes across animation frames.
+     */
     const applyTopLine = (line) => {
       if (typeof line !== 'number') return;
       const maxScroll = scroller.scrollHeight - scroller.clientHeight;
       const target = Math.max(0, Math.min(maxScroll, (line - 1) * lineHeight));
 
+      /**
+       * Purpose: Correct residual top-line drift after layout updates.
+       * How: Re-reads visible line index and adjusts `scrollTop` for a few bounded attempts.
+       */
       const applyWithCorrection = (attempt = 0) => {
         codeContent.scrollTop = target;
         syncScroll();
@@ -198,6 +231,10 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
       applyWithCorrection();
     };
 
+    /**
+     * Purpose: Refresh the measured line height used for scroll math.
+     * How: Derives it from rendered gutter metrics and falls back to computed styles.
+     */
     const refreshLineHeight = () => {
       lineHeight =
         (lineNumbers.scrollHeight && lineCount
@@ -205,6 +242,10 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
           : parseFloat(getComputedStyle(codeContent).lineHeight)) || lineHeight || 16;
     };
 
+    /**
+     * Purpose: Apply editor zoom while preserving reading position.
+     * How: Scales font sizes, recomputes line height, then restores the previous top line.
+     */
     const applyZoom = (zoom) => {
       const factor = Math.max(50, Math.min(200, Number(zoom) || 100)) / 100;
       const topLine = getTopLine();
@@ -221,6 +262,10 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
 
     if (scrollState && typeof scrollState.line === 'number') {
       let attempts = 0;
+      /**
+       * Purpose: Wait until layout is stable before restoring saved scroll.
+       * How: Retries on animation frames until content becomes scrollable or a max attempt threshold is reached.
+       */
       const settle = () => {
         attempts += 1;
         if (codeContent.scrollHeight > codeContent.clientHeight || attempts >= 5) {

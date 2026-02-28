@@ -1,14 +1,17 @@
 /**
- * Vue Code C++
- * Affiche le code C++ généré avec numéros de ligne et coloration syntaxique
- * Inspiré de faustservice
+ * Purpose: Define the generated C++ source view.
+ * How: Fetches compiled C++ output, highlights syntax, and offers flags presets/help with scroll persistence.
  */
 
+/**
+ * Purpose: Expose the label used by the global view selector.
+ * How: Returns the static display name for this module.
+ */
 export function getName() {
   return 'C++ Code';
 }
 
-// Mots-clés C++
+// C++ keywords used by the syntax highlighter.
 const CPP_KEYWORDS = [
   'class', 'struct', 'public', 'private', 'protected',
   'virtual', 'static', 'const', 'constexpr', 'inline',
@@ -24,64 +27,68 @@ const CPP_KEYWORDS = [
 ];
 
 /**
- * Applique la coloration syntaxique C++ en utilisant des tokens
+ * Purpose: Apply lightweight C++ syntax highlighting on source text.
+ * How: Escapes HTML, replaces token categories with placeholders, then restores styled HTML spans.
  */
 function highlightCpp(code) {
   const tokens = [];
   let tokenId = 0;
 
-  // Fonction pour créer un placeholder unique
+  /**
+   * Purpose: Protect highlighted fragments from later regex passes.
+   * How: Stores fragment HTML in a token table and returns a unique placeholder marker.
+   */
   function placeholder(html) {
     const id = `__TOKEN_${tokenId++}__`;
     tokens.push({ id, html });
     return id;
   }
 
-  // Échapper HTML d'abord
+  // Escape HTML first.
   let result = escapeHtml(code);
 
-  // 1. Commentaires // (les protéger en premier)
+  // 1. Line comments (protect first).
   result = result.replace(/(\/\/[^\n]*)/g, (match) => {
     return placeholder(`<span class="cpp-comment">${match}</span>`);
   });
 
-  // 2. Commentaires /* */
+  // 2. Block comments.
   result = result.replace(/(\/\*[\s\S]*?\*\/)/g, (match) => {
     return placeholder(`<span class="cpp-comment">${match}</span>`);
   });
 
-  // 3. Directives préprocesseur #include, #define, etc.
+  // 3. Preprocessor directives.
   result = result.replace(/(#\s*\w+[^\n]*)/g, (match) => {
     return placeholder(`<span class="cpp-preprocessor">${match}</span>`);
   });
 
-  // 4. Chaînes de caractères
+  // 4. String literals.
   result = result.replace(/("(?:[^"\\]|\\.)*")/g, (match) => {
     return placeholder(`<span class="cpp-string">${match}</span>`);
   });
 
-  // 5. Caractères
+  // 5. Character literals.
   result = result.replace(/('(?:[^'\\]|\\.)')/g, (match) => {
     return placeholder(`<span class="cpp-string">${match}</span>`);
   });
 
-  // 6. Nombres (entiers, flottants, hex)
+  // 6. Numeric literals.
   result = result.replace(/\b(0x[0-9a-fA-F]+|\d+\.?\d*(?:e[+-]?\d+)?[fFlL]?)\b/g, (match) => {
     return placeholder(`<span class="cpp-number">${match}</span>`);
   });
 
-  // 7. Mots-clés
+  // 7. Keywords.
   const keywordPattern = new RegExp(`\\b(${CPP_KEYWORDS.join('|')})\\b`, 'g');
   result = result.replace(keywordPattern, (match) => {
     return placeholder(`<span class="cpp-keyword">${match}</span>`);
   });
 
-  // 8. Types personnalisés (commencent par majuscule)
+  // 8. User-like type names starting with uppercase.
   result = result.replace(/\b([A-Z][a-zA-Z0-9_]*)\b/g, (match) => {
     return placeholder(`<span class="cpp-type">${match}</span>`);
   });
 
-  // Restaurer tous les tokens
+  // Restore all placeholder tokens.
   for (const token of tokens) {
     result = result.replace(token.id, token.html);
   }
@@ -90,7 +97,8 @@ function highlightCpp(code) {
 }
 
 /**
- * Échappe les caractères HTML
+ * Purpose: Sanitize plain text before HTML insertion.
+ * How: Replaces reserved characters with HTML entities.
  */
 function escapeHtml(text) {
   return text
@@ -100,7 +108,8 @@ function escapeHtml(text) {
 }
 
 /**
- * Génère les numéros de ligne
+ * Purpose: Build the line-number gutter content.
+ * How: Generates numbers from 1..N and joins them with newlines.
  */
 function generateLineNumbers(lineCount) {
   const lines = [];
@@ -113,10 +122,18 @@ function generateLineNumbers(lineCount) {
 const CPP_PRESETS_STORAGE_KEY = 'faustforge.cpp.presets.v1';
 const cppFlagsBySha = Object.create(null);
 
+/**
+ * Purpose: Normalize compiler flags for stable comparison and storage.
+ * How: Trims input and collapses consecutive spaces into single spaces.
+ */
 function normalizeFlags(input) {
   return String(input || '').trim().replace(/\s+/g, ' ');
 }
 
+/**
+ * Purpose: Load persisted C++ flag presets from local storage.
+ * How: Parses JSON, normalizes each entry, and filters out invalid or empty presets.
+ */
 function loadCppPresets() {
   try {
     const parsed = JSON.parse(localStorage.getItem(CPP_PRESETS_STORAGE_KEY) || '[]');
@@ -133,6 +150,10 @@ function loadCppPresets() {
   }
 }
 
+/**
+ * Purpose: Persist C++ flag presets for future sessions.
+ * How: Serializes presets to local storage and ignores storage failures.
+ */
 function saveCppPresets(presets) {
   try {
     localStorage.setItem(CPP_PRESETS_STORAGE_KEY, JSON.stringify(presets));
@@ -141,6 +162,10 @@ function saveCppPresets(presets) {
   }
 }
 
+/**
+ * Purpose: Insert or update one preset entry in memory.
+ * How: Normalizes the flag string, updates existing entry when present, otherwise appends a new one.
+ */
 function upsertCppPreset(presets, flags, status, lastUsedAt = Date.now()) {
   const norm = normalizeFlags(flags);
   if (!norm) return presets;
@@ -157,12 +182,20 @@ function upsertCppPreset(presets, flags, status, lastUsedAt = Date.now()) {
   return presets;
 }
 
+/**
+ * Purpose: Provide selectable presets ordered by relevance.
+ * How: Keeps only valid entries and sorts them by descending `lastUsedAt`.
+ */
 function getValidPresetsSorted(presets) {
   return presets
     .filter((p) => p.status === 'valid' && p.flags)
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
 }
 
+/**
+ * Purpose: Retrieve the generated C++ code for a session.
+ * How: Calls `/generated.cpp`, maps 404 to an empty marker, and returns code text on success.
+ */
 async function fetchCppCode(sha) {
   const response = await fetch(`/api/${sha}/generated.cpp`);
   if (!response.ok) {
@@ -174,6 +207,10 @@ async function fetchCppCode(sha) {
   return { ok: true, empty: false, code: await response.text() };
 }
 
+/**
+ * Purpose: Ask backend to recompile C++ with custom Faust flags.
+ * How: Sends flags to `/compile/cpp` and raises backend errors as exceptions.
+ */
 async function compileCppWithFlags(sha, flags) {
   const response = await fetch(`/api/${sha}/compile/cpp`, {
     method: 'POST',
@@ -186,6 +223,10 @@ async function compileCppWithFlags(sha, flags) {
   }
 }
 
+/**
+ * Purpose: Load Faust compiler help text for the flags help panel.
+ * How: Requests `/api/faust/help` and returns normalized text with backend error mapping.
+ */
 async function fetchFaustHelp() {
   const response = await fetch('/api/faust/help');
   const data = await response.json().catch(() => ({}));
@@ -195,6 +236,10 @@ async function fetchFaustHelp() {
   return String(data.help || 'Faust help unavailable');
 }
 
+/**
+ * Purpose: Render the C++ code pane for one session.
+ * How: Builds toolbar/editor UI, manages presets/help/actions, and maintains zoom/scroll synchronization.
+ */
 export async function render(container, { sha, scrollState, onScrollChange }) {
   try {
     let presets = loadCppPresets();
@@ -271,7 +316,7 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
       </div>
     `;
 
-    // Synchroniser le scroll
+    // Keep line numbers and code scroll in sync.
     const lineNumbers = container.querySelector('.line-numbers');
     const codeContent = container.querySelector('.code-content');
     const flagsInput = container.querySelector('.code-flags-input');
@@ -294,14 +339,26 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
     const scroller = codeContent;
     let restoring = true;
 
+    /**
+     * Purpose: Mirror code scrolling into the line-number gutter.
+     * How: Copies the code panel `scrollTop` to the gutter.
+     */
     const syncScroll = () => {
       if (scroller === codeContent) {
         lineNumbers.scrollTop = codeContent.scrollTop;
       }
     };
 
+    /**
+     * Purpose: Compute which source line is currently at the top of the viewport.
+     * How: Converts `scrollTop` to a 1-based line index using measured line height.
+     */
     const getTopLine = () => Math.floor(codeContent.scrollTop / lineHeight) + 1;
 
+    /**
+     * Purpose: Persist user scroll position to the parent app state.
+     * How: Emits the current top line through `onScrollChange` when not restoring state.
+     */
     const capture = () => {
       if (restoring) return;
       if (typeof onScrollChange === 'function') {
@@ -314,11 +371,19 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
       capture();
     });
 
+    /**
+     * Purpose: Restore the code view so a given line appears at the top.
+     * How: Computes target scroll offset and applies small corrective passes across animation frames.
+     */
     const applyTopLine = (line) => {
       if (typeof line !== 'number') return;
       const maxScroll = scroller.scrollHeight - scroller.clientHeight;
       const target = Math.max(0, Math.min(maxScroll, (line - 1) * lineHeight));
 
+      /**
+       * Purpose: Correct residual top-line drift after layout updates.
+       * How: Re-reads visible line index and adjusts `scrollTop` for a few bounded attempts.
+       */
       const applyWithCorrection = (attempt = 0) => {
         codeContent.scrollTop = target;
         syncScroll();
@@ -341,6 +406,10 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
       applyWithCorrection();
     };
 
+    /**
+     * Purpose: Refresh the measured line height used for scroll math.
+     * How: Derives it from rendered gutter metrics and falls back to computed styles.
+     */
     const refreshLineHeight = () => {
       lineHeight =
         (lineNumbers.scrollHeight && lineCount
@@ -348,6 +417,10 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
           : parseFloat(getComputedStyle(codeContent).lineHeight)) || lineHeight || 16;
     };
 
+    /**
+     * Purpose: Apply editor zoom while preserving reading position.
+     * How: Scales font sizes, recomputes line height, then restores the previous top line.
+     */
     const applyZoom = (zoom) => {
       const factor = Math.max(50, Math.min(200, Number(zoom) || 100)) / 100;
       const topLine = getTopLine();
@@ -362,12 +435,20 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
     }
     applyZoom(100);
 
+    /**
+     * Purpose: Display the current flags operation status in the toolbar.
+     * How: Writes text content and toggles error coloring when needed.
+     */
     const setFlagsStatus = (text, isError = false) => {
       if (!flagsStatus) return;
       flagsStatus.textContent = text || '';
       flagsStatus.style.color = isError ? '#ff7a7a' : '';
     };
 
+    /**
+     * Purpose: Apply the currently entered Faust flags to regenerate C++ output.
+     * How: Validates input/preset state, triggers backend compilation, updates preset metadata, and re-renders.
+     */
     const applyFlags = async (options = {}) => {
       const force = options && options.force === true;
       if (!flagsInput) return;
@@ -450,6 +531,10 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
 
     if (scrollState && typeof scrollState.line === 'number') {
       let attempts = 0;
+      /**
+       * Purpose: Wait until layout is stable before restoring saved scroll.
+       * How: Retries on animation frames until content becomes scrollable or a max attempt threshold is reached.
+       */
       const settle = () => {
         attempts += 1;
         if (codeContent.scrollHeight > codeContent.clientHeight || attempts >= 5) {

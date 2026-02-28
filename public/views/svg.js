@@ -1,16 +1,23 @@
 /**
- * Vue Diagrammes SVG
- * Affiche les diagrammes de signal générés par Faust
- * Inspiré de faustservice
+ * Purpose: Define the SVG diagrams view.
+ * How: Loads generated SVG files for a session, supports drill-down navigation, and applies zoom controls.
  */
 
+/**
+ * Purpose: Expose the label used by the global view selector.
+ * How: Returns the static display name for this module.
+ */
 export function getName() {
   return 'Diagrams';
 }
 
+/**
+ * Purpose: Render the SVG diagrams browser for one session.
+ * How: Loads available diagram files, builds navigation UI, and manages SVG loading/zoom/history state.
+ */
 export async function render(container, { sha }) {
   try {
-    // Récupérer la liste des fichiers SVG
+    // Fetch the available SVG file list.
     const response = await fetch(`/api/${sha}/svg`);
 
     if (!response.ok) {
@@ -28,14 +35,14 @@ export async function render(container, { sha }) {
       return;
     }
 
-    // Trouver le fichier principal (process.svg)
+    // Resolve the root diagram file (`process.svg` when available).
     const mainFile = files.find(f => f === 'process.svg') || files[0];
 
-    // Historique de navigation
+    // Navigation history used by the "up" action.
     const history = [];
     let currentFile = null;
 
-    // Créer l'interface
+    // Build the view UI.
     container.innerHTML = `
       <div class="svg-view">
         <div class="svg-toolbar">
@@ -81,15 +88,18 @@ export async function render(container, { sha }) {
     let currentZoom = 100;
     let zoomMode = 'manual';
 
-    // Gestionnaire de clics SVG (en phase capture comme faustservice)
+    /**
+     * Purpose: Intercept clicks on links inside rendered SVG diagrams.
+     * How: Walks up from event target to `<a>`, resolves target filename, and loads matching local SVG files.
+     */
     function svgClickHandler(e) {
-      // Chercher un lien parent
+      // Find a parent link.
       let target = e.target;
       while (target && target !== svgContent) {
         if (target.tagName.toLowerCase() === 'a') {
           const href = target.getAttribute('xlink:href') || target.getAttribute('href');
           if (href) {
-            // Extraire le nom du fichier avec regex (comme faustservice)
+            // Extract the linked SVG filename.
             const match = href.match(/(?:.*\/)?([^\/]+\.svg)$/);
             if (match) {
               const filename = match[1];
@@ -106,22 +116,28 @@ export async function render(container, { sha }) {
       }
     }
 
-    // Afficher/masquer l'overlay de progression
+    /**
+     * Purpose: Control the loading overlay visibility.
+     * How: Toggles the `hidden` class on the progress element.
+     */
     function showProgress(show) {
       progressOverlay.classList.toggle('hidden', !show);
     }
 
-    // Charger un SVG
+    /**
+     * Purpose: Load and display one SVG file in the viewer.
+     * How: Updates history/UI state, fetches the SVG content, injects it, and reattaches click interception.
+     */
     async function loadSvg(filename, addToHistory = true) {
       showProgress(true);
 
-      // Ajouter à l'historique si ce n'est pas un retour
+      // Push previous file to history for forward navigation semantics.
       if (addToHistory && currentFile && currentFile !== filename) {
         history.push(currentFile);
       }
       currentFile = filename;
 
-      // Mettre à jour l'UI
+      // Update navigation and current file indicators.
       upBtn.disabled = currentFile === mainFile;
       currentFileLabel.textContent = filename;
 
@@ -134,10 +150,10 @@ export async function render(container, { sha }) {
         const svgText = await svgResponse.text();
         svgContent.innerHTML = svgText;
 
-        // Appliquer le zoom
+        // Re-apply current zoom mode after content replacement.
         applyZoom();
 
-        // Ajouter l'interception des clics (phase capture)
+        // Rebind click interception in capture phase.
         svgContent.removeEventListener('click', svgClickHandler, true);
         svgContent.addEventListener('click', svgClickHandler, true);
 
@@ -146,7 +162,10 @@ export async function render(container, { sha }) {
       }
     }
 
-    // Remonte d'un niveau; au sommet, rester sur process.svg.
+    /**
+     * Purpose: Navigate one level back toward the root diagram.
+     * How: Pops history when available, otherwise returns to `mainFile`.
+     */
     function goUp() {
       if (currentFile === mainFile) return;
       if (history.length > 0) {
@@ -157,6 +176,10 @@ export async function render(container, { sha }) {
       loadSvg(mainFile, false);
     }
 
+    /**
+     * Purpose: Compute automatic zoom that fits SVG inside the viewport.
+     * How: Measures current SVG and container dimensions and returns a bounded fit percentage.
+     */
     function computeFitZoom() {
       const svg = svgContent.querySelector('svg');
       if (!svg) return currentZoom;
@@ -170,7 +193,10 @@ export async function render(container, { sha }) {
       return Math.max(25, Math.min(400, Math.round(fitRatio * 100)));
     }
 
-    // Appliquer le zoom
+    /**
+     * Purpose: Apply current zoom settings to the displayed SVG.
+     * How: Resolves auto/manual zoom and writes a CSS scale transform anchored at top-left.
+     */
     function applyZoom() {
       const svg = svgContent.querySelector('svg');
       if (!svg) return;
@@ -181,7 +207,7 @@ export async function render(container, { sha }) {
       svg.style.transformOrigin = 'top left';
     }
 
-    // Événements navigation
+    // Bind navigation actions.
     container.querySelectorAll('.svg-nav-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const action = btn.dataset.action;
@@ -203,7 +229,7 @@ export async function render(container, { sha }) {
       });
     }
 
-    // Charger le SVG initial
+    // Load initial SVG file.
     if (zoomSelect) {
       zoomSelect.value = 'auto';
       zoomMode = 'auto';

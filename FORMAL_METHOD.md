@@ -127,3 +127,26 @@ En particulier, la spécification ne contraint pas :
 
 La spécification peut évoluer au cours du projet. À un instant donné, elle constitue
 la référence unique permettant d’évaluer la conformité conceptuelle du système.
+
+## Convention de commentaires du code
+
+Pour garantir une base de code homogène et exploitable par les humains comme par les IA,
+la documentation locale du code suit les règles suivantes :
+
+- Tous les commentaires du code source sont rédigés en **anglais**.
+- Toute fonction (exportée ou interne) doit être précédée d’un commentaire.
+- Ce commentaire contient systématiquement **deux parties** explicites :
+  - `Purpose`: rôle de la fonction dans l’architecture globale (à quoi elle sert).
+  - `How`: mécanisme de réalisation (ce qu’elle fait concrètement).
+
+Format recommandé :
+
+```text
+/**
+ * Purpose: ...
+ * How: ...
+ */
+```
+
+Cette convention est normative pour le projet : toute nouvelle fonction ou modification
+de fonction doit respecter ce format.
