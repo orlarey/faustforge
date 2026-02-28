@@ -1,19 +1,19 @@
 /**
  * faustforge Frontend Application
- * Navigation de sessions inspirée de faustservice
+ * Session navigation and multi-view orchestration inspired by faustservice.
  */
 import { TOOLTIP_TEXTS } from './tooltip-texts.js';
 
-// État de l'application
+// Application state.
 const state = {
   currentSha: null,
   currentView: 'dsp',
   sessionOrder: 'chronological', // chronological | usage
   views: [],
-  sessions: [],        // Sessions triées selon sessionOrder
-  sessionIndex: -1,    // -1 = pas initialisé, sessions.length = session vide
-  dragCounter: 0,      // Compteur pour gérer dragenter/dragleave
-  runStateBySha: {},   // État Run par session (params)
+  sessions: [],        // Sessions sorted according to sessionOrder.
+  sessionIndex: -1,    // -1 = uninitialized, sessions.length = empty-session slot.
+  dragCounter: 0,      // Counter used to balance dragenter/dragleave events.
+  runStateBySha: {},   // Run state persisted per session (params, orbit, etc.).
   audioUnlocked: false,
   runGlobal: {
     audioRunning: false,
@@ -54,7 +54,7 @@ with {
 };
 `;
 
-// Éléments DOM
+// Core DOM elements.
 const fileInput = document.getElementById('file-input');
 const downloadBtn = document.getElementById('download-btn');
 const errorBanner = document.getElementById('error-banner');
@@ -98,6 +98,10 @@ let viewTransitionSeq = 0;
 let activeViewTransition = null;
 const RUN_USAGE_ACTIVE_WINDOW_MS = 8000;
 
+/**
+ * Purpose: Handle the `extractLabelText` step in the application flow.
+ * How: Executes the extract label text logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function extractLabelText(el) {
   const label = el.closest('label');
   if (!label) return '';
@@ -106,6 +110,10 @@ function extractLabelText(el) {
   return (clone.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Purpose: Handle the `inferTooltip` step in the application flow.
+ * How: Executes the infer tooltip logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function inferTooltip(el) {
   if (!el || !(el instanceof HTMLElement)) return '';
   const ariaLabel = (el.getAttribute('aria-label') || '').trim();
@@ -166,6 +174,10 @@ function inferTooltip(el) {
   return '';
 }
 
+/**
+ * Purpose: Handle the `applyTooltips` step in the application flow.
+ * How: Executes the apply tooltips logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function applyTooltips(root = document) {
   const selectors = [
     'button',
@@ -183,6 +195,10 @@ function applyTooltips(root = document) {
   });
 }
 
+/**
+ * Purpose: Handle the `scheduleTooltipApply` step in the application flow.
+ * How: Executes the schedule tooltip apply logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function scheduleTooltipApply(root = document) {
   if (tooltipApplyRaf) return;
   tooltipApplyRaf = requestAnimationFrame(() => {
@@ -190,9 +206,9 @@ function scheduleTooltipApply(root = document) {
     applyTooltips(root);
   });
 }
-
 /**
- * Charge dynamiquement les modules de vue
+ * Purpose: Handle the `loadViews` step in the application flow.
+ * How: Executes the load views logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function loadViews() {
   const viewModules = ['dsp', 'svg', 'run', 'cpp', 'tasks', 'signals'];
@@ -211,12 +227,12 @@ async function loadViews() {
     }
   }
 
-  // Générer le sélecteur de vue
+  // Refresh the view selector after loading all view modules.
   generateViewSelect();
 }
-
 /**
- * Génère le sélecteur de vue
+ * Purpose: Handle the `generateViewSelect` step in the application flow.
+ * How: Executes the generate view select logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 function generateViewSelect() {
   const currentSession = getCurrentSession();
@@ -239,6 +255,10 @@ function generateViewSelect() {
   }
 }
 
+/**
+ * Purpose: Handle the `getCurrentSession` step in the application flow.
+ * How: Executes the get current session logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function getCurrentSession() {
   if (state.sessionIndex < 0 || state.sessionIndex >= state.sessions.length) return null;
   return state.sessions[state.sessionIndex] || null;
@@ -248,6 +268,10 @@ function isDraftLiveSession(session) {
   return !!(session && session.kind === 'live' && session.live_draft === true);
 }
 
+/**
+ * Purpose: Handle the `markSessionUsed` step in the application flow.
+ * How: Executes the mark session used logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function markSessionUsed(reason = 'ui-action', weight = 1) {
   const sha = state.currentSha;
   if (!sha) return;
@@ -290,6 +314,10 @@ function markSessionUsed(reason = 'ui-action', weight = 1) {
   }).catch(() => {});
 }
 
+/**
+ * Purpose: Handle the `loadSessionOrderPreference` step in the application flow.
+ * How: Executes the load session order preference logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function loadSessionOrderPreference() {
   try {
     const value = localStorage.getItem(SESSION_ORDER_STORAGE_KEY);
@@ -301,6 +329,10 @@ function loadSessionOrderPreference() {
   }
 }
 
+/**
+ * Purpose: Handle the `saveSessionOrderPreference` step in the application flow.
+ * How: Executes the save session order preference logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function saveSessionOrderPreference() {
   try {
     localStorage.setItem(SESSION_ORDER_STORAGE_KEY, state.sessionOrder);
@@ -309,6 +341,10 @@ function saveSessionOrderPreference() {
   }
 }
 
+/**
+ * Purpose: Handle the `updateSessionOrderIndicator` step in the application flow.
+ * How: Executes the update session order indicator logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function updateSessionOrderIndicator() {
   if (!sessionOrderIndicator) return;
   if (state.sessionOrder === 'usage') {
@@ -320,6 +356,10 @@ function updateSessionOrderIndicator() {
   sessionOrderIndicator.title = 'Order: Chronological';
 }
 
+/**
+ * Purpose: Handle the `formatSessionEntryLabel` step in the application flow.
+ * How: Executes the format session entry label logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function formatSessionEntryLabel(session) {
   const isLive = session.kind === 'live';
   const isDraft = isDraftLiveSession(session);
@@ -329,6 +369,10 @@ function formatSessionEntryLabel(session) {
   return `${isLive ? 'LIVE | ' : ''}${idText} | ${session.filename}${isDraft ? ' (draft)' : ''}`;
 }
 
+/**
+ * Purpose: Handle the `ensureSessionPicker` step in the application flow.
+ * How: Executes the ensure session picker logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function ensureSessionPicker() {
   if (sessionPickerEl) return;
   const picker = document.createElement('div');
@@ -403,6 +447,10 @@ function ensureSessionPicker() {
   }
 }
 
+/**
+ * Purpose: Handle the `positionSessionPicker` step in the application flow.
+ * How: Executes the position session picker logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function positionSessionPicker() {
   if (!sessionPickerOpen || !sessionPickerEl) return;
   const rect = sessionLabel.getBoundingClientRect();
@@ -426,6 +474,10 @@ function positionSessionPicker() {
   sessionPickerEl.style.width = `${Math.round(width)}px`;
 }
 
+/**
+ * Purpose: Handle the `renderSessionPickerList` step in the application flow.
+ * How: Executes the render session picker list logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function renderSessionPickerList(rawQuery = '', options = {}) {
   if (!sessionPickerListEl) return;
   const autoCenter = !!(options && options.autoCenter);
@@ -519,6 +571,10 @@ function renderSessionPickerList(rawQuery = '', options = {}) {
   }
 }
 
+/**
+ * Purpose: Handle the `closeSessionPicker` step in the application flow.
+ * How: Executes the close session picker logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function closeSessionPicker() {
   if (!sessionPickerOpen) return;
   sessionPickerOpen = false;
@@ -543,6 +599,10 @@ function closeSessionPicker() {
   }
 }
 
+/**
+ * Purpose: Handle the `openSessionPicker` step in the application flow.
+ * How: Executes the open session picker logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function openSessionPicker() {
   ensureSessionPicker();
   renderSessionPickerList('', { autoCenter: true });
@@ -584,6 +644,10 @@ function openSessionPicker() {
   window.addEventListener('scroll', sessionPickerResizeHandler, true);
 }
 
+/**
+ * Purpose: Handle the `toggleSessionPicker` step in the application flow.
+ * How: Executes the toggle session picker logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function toggleSessionPicker() {
   if (sessionPickerOpen) {
     closeSessionPicker();
@@ -592,6 +656,10 @@ function toggleSessionPicker() {
   }
 }
 
+/**
+ * Purpose: Handle the `getEffectiveView` step in the application flow.
+ * How: Executes the get effective view logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function getEffectiveView(viewId) {
   const session = getCurrentSession();
   if (isDraftLiveSession(session)) {
@@ -600,6 +668,10 @@ function getEffectiveView(viewId) {
   return viewId;
 }
 
+/**
+ * Purpose: Handle the `hasParamDiff` step in the application flow.
+ * How: Executes the has param diff logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function hasParamDiff(prevParams, nextParams) {
   if (!prevParams || !nextParams) return false;
   const prevEntries = Object.entries(prevParams);
@@ -613,6 +685,10 @@ function hasParamDiff(prevParams, nextParams) {
   return false;
 }
 
+/**
+ * Purpose: Handle the `wait` step in the application flow.
+ * How: Executes the wait logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function wait(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -629,6 +705,10 @@ function disposeViewById(viewId) {
   }
 }
 
+/**
+ * Purpose: Handle the `extractChildren` step in the application flow.
+ * How: Executes the extract children logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function extractChildren(fromEl, toEl) {
   while (fromEl.firstChild) {
     toEl.appendChild(fromEl.firstChild);
@@ -653,6 +733,10 @@ function cancelViewTransition() {
   viewContainer.classList.remove('view-crossfade-host');
 }
 
+/**
+ * Purpose: Handle the `renderCurrentViewWithFade` step in the application flow.
+ * How: Executes the render current view with fade logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 async function renderCurrentViewWithFade(enabled, previousViewId = null) {
   if (!enabled) {
     await renderCurrentView();
@@ -691,9 +775,9 @@ async function renderCurrentViewWithFade(enabled, previousViewId = null) {
   activeViewTransition = null;
   if (previousViewId) disposeViewById(previousViewId);
 }
-
 /**
- * Change la vue active
+ * Purpose: Handle the `switchView` step in the application flow.
+ * How: Executes the switch view logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function switchView(viewId, options = {}) {
   const isRemote = options && options.source === 'remote';
@@ -721,15 +805,15 @@ async function switchView(viewId, options = {}) {
     await syncState({ view: effectiveViewId });
   }
 
-  // Afficher la vue
+  // Show the view container before rendering content.
   await renderCurrentViewWithFade(changed && animate, changed ? previousViewId : null);
   if (changed && state.currentSha && trackUsage) {
     markSessionUsed('view-change');
   }
 }
-
 /**
- * Affiche la vue courante
+ * Purpose: Handle the `renderCurrentView` step in the application flow.
+ * How: Executes the render current view logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function renderCurrentView(targetContainer = viewContainer) {
   if (!state.currentSha) return;
@@ -858,9 +942,9 @@ async function renderCurrentView(targetContainer = viewContainer) {
     scheduleTooltipApply(targetContainer);
   }
 }
-
 /**
- * Charge les sessions existantes selon l'ordre courant.
+ * Purpose: Handle the `loadSessions` step in the application flow.
+ * How: Executes the load sessions logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function loadSessions() {
   try {
@@ -878,28 +962,28 @@ async function loadSessions() {
     state.sessions = [];
   }
 }
-
 /**
- * Met à jour l'index de session pour le SHA courant
+ * Purpose: Handle the `refreshSessionIndex` step in the application flow.
+ * How: Executes the refresh session index logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 function refreshSessionIndex() {
   if (!state.currentSha) {
-    // Session vide = index au-delà du tableau
+    // Empty session uses the index just beyond the sessions array.
     state.sessionIndex = state.sessions.length;
     return;
   }
   const idx = state.sessions.findIndex(s => s.sha1 === state.currentSha);
   state.sessionIndex = idx >= 0 ? idx : state.sessions.length;
 }
-
 /**
- * Met à jour l'affichage de la navigation de session
+ * Purpose: Handle the `updateSessionNavigation` step in the application flow.
+ * How: Executes the update session navigation logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 function updateSessionNavigation() {
   const isEmpty = state.sessionIndex >= state.sessions.length || state.sessionIndex < 0;
 
   if (isEmpty) {
-    // Session vide
+    // Empty session.
     sessionLabel.textContent = 'Empty | Drop .dsp';
     sessionLabel.classList.add('clickable');
     sessionPrev.disabled = state.sessions.length === 0;
@@ -909,7 +993,7 @@ function updateSessionNavigation() {
     if (editSessionBtn) editSessionBtn.classList.add('hidden');
     if (downloadBtn) downloadBtn.classList.add('hidden');
   } else {
-    // Session active
+    // Active session.
     const session = state.sessions[state.sessionIndex];
     const isLive = session.kind === 'live';
     const isDraft = isDraftLiveSession(session);
@@ -919,7 +1003,7 @@ function updateSessionNavigation() {
     sessionLabel.textContent = `${isLive ? 'LIVE | ' : ''}${shortId} | ${session.filename}${isDraft ? ' (draft)' : ''}`;
     sessionLabel.classList.add('clickable');
     sessionPrev.disabled = state.sessionIndex === 0;
-    sessionNext.disabled = false; // On peut toujours aller vers session vide
+    sessionNext.disabled = false; // Keep access to the empty-session slot.
     if (deleteSessionBtn) deleteSessionBtn.classList.remove('hidden');
     if (refreshSessionBtn) refreshSessionBtn.classList.remove('hidden');
     if (editSessionBtn) {
@@ -933,9 +1017,9 @@ function updateSessionNavigation() {
   }
   generateViewSelect();
 }
-
 /**
- * Navigue vers la session précédente (plus ancienne)
+ * Purpose: Handle the `navigateToPrevious` step in the application flow.
+ * How: Executes the navigate to previous logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function navigateToPrevious() {
   if (state.sessionIndex > 0) {
@@ -943,9 +1027,9 @@ async function navigateToPrevious() {
     await loadSessionByIndex(state.sessionIndex);
   }
 }
-
 /**
- * Navigue vers la session suivante (plus récente) ou session vide
+ * Purpose: Handle the `navigateToNext` step in the application flow.
+ * How: Executes the navigate to next logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function navigateToNext() {
   if (state.sessionIndex < state.sessions.length) {
@@ -953,14 +1037,14 @@ async function navigateToNext() {
     if (state.sessionIndex < state.sessions.length) {
       await loadSessionByIndex(state.sessionIndex);
     } else {
-      // Aller vers session vide
+      // Move to the empty-session slot.
       await loadEmptySession();
     }
   }
 }
-
 /**
- * Charge une session par son index
+ * Purpose: Handle the `loadSessionByIndex` step in the application flow.
+ * How: Executes the load session by index logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function loadSessionByIndex(index) {
   if (index < 0 || index >= state.sessions.length) return;
@@ -978,7 +1062,7 @@ async function loadSessionByIndex(index) {
   updateSessionNavigation();
   hideError();
 
-  // Charger les erreurs de la session
+  // Load session compilation/runtime errors.
   try {
     const errorsResponse = await fetch(`/api/${session.sha1}/errors.log`);
     if (errorsResponse.ok) {
@@ -988,16 +1072,16 @@ async function loadSessionByIndex(index) {
       }
     }
   } catch {
-    // Ignorer les erreurs de chargement des erreurs
+    // Ignore error-log loading failures.
   }
 
   showInterface();
   await renderCurrentView();
   syncState({ sha1: session.sha1, view: state.currentView });
 }
-
 /**
- * Charge une session vide
+ * Purpose: Handle the `loadEmptySession` step in the application flow.
+ * How: Executes the load empty session logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function loadEmptySession() {
   cancelViewTransition();
@@ -1011,21 +1095,26 @@ async function loadEmptySession() {
   hideInterface();
   syncState({ sha1: null, view: state.currentView });
 }
-
 /**
- * Affiche l'overlay de chargement
+ * Purpose: Handle the `showLoading` step in the application flow.
+ * How: Executes the show loading logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 function showLoading() {
   loadingOverlay.classList.remove('hidden');
 }
 
 /**
- * Cache l'overlay de chargement
+ * Purpose: Handle the `hideLoading` step in the application flow.
+ * How: Executes the hide loading logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 function hideLoading() {
   loadingOverlay.classList.add('hidden');
 }
 
+/**
+ * Purpose: Handle the `showAudioGate` step in the application flow.
+ * How: Executes the show audio gate logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function showAudioGate(message = '') {
   if (!audioGate) return;
   audioGate.classList.remove('hidden');
@@ -1040,6 +1129,10 @@ function showAudioGate(message = '') {
   }
 }
 
+/**
+ * Purpose: Handle the `hideAudioGate` step in the application flow.
+ * How: Executes the hide audio gate logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function hideAudioGate() {
   if (!audioGate) return;
   stopShowcasePreview();
@@ -1050,6 +1143,10 @@ function hideAudioGate() {
   }
 }
 
+/**
+ * Purpose: Handle the `submitShowcaseSession` step in the application flow.
+ * How: Executes the submit showcase session logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 async function submitShowcaseSession() {
   const response = await fetch('/api/submit', {
     method: 'POST',
@@ -1066,6 +1163,10 @@ async function submitShowcaseSession() {
   return result.sha1;
 }
 
+/**
+ * Purpose: Handle the `stopShowcasePreview` step in the application flow.
+ * How: Executes the stop showcase preview logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function stopShowcasePreview() {
   cancelViewTransition();
   const timer = state.showcase.viewTimer;
@@ -1076,6 +1177,10 @@ function stopShowcasePreview() {
   state.showcase.active = false;
 }
 
+/**
+ * Purpose: Handle the `isShowcaseGateActive` step in the application flow.
+ * How: Executes the is showcase gate active logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function isShowcaseGateActive() {
   return (
     state.showcase.active
@@ -1085,6 +1190,10 @@ function isShowcaseGateActive() {
   );
 }
 
+/**
+ * Purpose: Handle the `startShowcasePreview` step in the application flow.
+ * How: Executes the start showcase preview logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 async function startShowcasePreview() {
   if (state.audioUnlocked || !audioGate || audioGate.classList.contains('hidden')) return;
   stopShowcasePreview();
@@ -1123,6 +1232,10 @@ async function startShowcasePreview() {
   }
 }
 
+/**
+ * Purpose: Handle the `unlockAudioGate` step in the application flow.
+ * How: Executes the unlock audio gate logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 async function unlockAudioGate() {
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) {
@@ -1142,12 +1255,12 @@ async function unlockAudioGate() {
     }
   }
 }
-
 /**
- * Soumet du code Faust au serveur
+ * Purpose: Handle the `submitCode` step in the application flow.
+ * How: Executes the submit code logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function submitCode(code, filename) {
-  // Afficher l'état de chargement
+  // Show loading state.
   showLoading();
   hideError();
 
@@ -1167,20 +1280,20 @@ async function submitCode(code, filename) {
       throw new Error(result.error || 'Submission failed');
     }
 
-    // Mettre à jour l'état
+    // Update local active-session state.
     state.currentSha = result.sha1;
 
-    // Recharger la liste des sessions
+    // Reload session list.
     await loadSessions();
     refreshSessionIndex();
     updateSessionNavigation();
 
-    // Afficher les erreurs s'il y en a
+    // Show backend errors when present.
     if (result.errors && result.errors.trim()) {
       showError(result.errors);
     }
 
-    // Afficher l'interface
+    // Show main interface.
     showInterface();
 
     // Persist new active session first to avoid poll race reverting to previous session.
@@ -1195,9 +1308,9 @@ async function submitCode(code, filename) {
     hideLoading();
   }
 }
-
 /**
- * Soumet un fichier .dsp
+ * Purpose: Handle the `submitFile` step in the application flow.
+ * How: Executes the submit file logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function submitFile(file) {
   const code = await file.text();
@@ -1214,6 +1327,10 @@ function makeClipFilename() {
   return `clip-${ts}.dsp`;
 }
 
+/**
+ * Purpose: Handle the `isTextInputTarget` step in the application flow.
+ * How: Executes the is text input target logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function isTextInputTarget(target) {
   if (!(target instanceof Element)) return false;
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
@@ -1226,6 +1343,10 @@ function getCurrentViewIndex() {
   return state.views.findIndex((v) => v.id === state.currentView);
 }
 
+/**
+ * Purpose: Handle the `navigateViewByOffset` step in the application flow.
+ * How: Executes the navigate view by offset logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 async function navigateViewByOffset(offset) {
   if (!Array.isArray(state.views) || state.views.length === 0) return;
   const currentIndex = getCurrentViewIndex();
@@ -1236,6 +1357,10 @@ async function navigateViewByOffset(offset) {
   await switchView(nextView.id);
 }
 
+/**
+ * Purpose: Handle the `ensurePasteSink` step in the application flow.
+ * How: Executes the ensure paste sink logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function ensurePasteSink() {
   if (pasteSink) return pasteSink;
   const sink = document.createElement('textarea');
@@ -1255,6 +1380,10 @@ function ensurePasteSink() {
   return sink;
 }
 
+/**
+ * Purpose: Handle the `captureScrollLine` step in the application flow.
+ * How: Executes the capture scroll line logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function captureScrollLine() {
   if (!state.currentSha) return;
   if (state.currentView !== 'dsp' && state.currentView !== 'cpp') return;
@@ -1271,33 +1400,33 @@ function captureScrollLine() {
   }
   state.viewScrollBySha[state.currentSha][state.currentView] = { line: topLine };
 }
-
 /**
- * Affiche le bandeau d'erreur
+ * Purpose: Handle the `showError` step in the application flow.
+ * How: Executes the show error logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 function showError(message) {
   errorBanner.textContent = message;
   errorBanner.classList.remove('hidden');
 }
-
 /**
- * Cache le bandeau d'erreur
+ * Purpose: Handle the `hideError` step in the application flow.
+ * How: Executes the hide error logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 function hideError() {
   errorBanner.classList.add('hidden');
   errorBanner.textContent = '';
 }
-
 /**
- * Affiche l'interface (conteneur de vue)
+ * Purpose: Handle the `showInterface` step in the application flow.
+ * How: Executes the show interface logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 function showInterface() {
   viewContainer.classList.remove('hidden');
   viewContainer.innerHTML = '';
 }
-
 /**
- * Cache l'interface
+ * Purpose: Handle the `hideInterface` step in the application flow.
+ * How: Executes the hide interface logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 function hideInterface() {
   const claudeConfig = getClaudeMcpConfigText();
@@ -1325,6 +1454,10 @@ function hideInterface() {
   scheduleTooltipApply(viewContainer);
 }
 
+/**
+ * Purpose: Handle the `getClaudeMcpConfigText` step in the application flow.
+ * How: Executes the get claude mcp config text logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function getClaudeMcpConfigText() {
   return JSON.stringify(
     {
@@ -1340,6 +1473,10 @@ function getClaudeMcpConfigText() {
   );
 }
 
+/**
+ * Purpose: Handle the `escapeHtml` step in the application flow.
+ * How: Executes the escape html logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function escapeHtml(text) {
   return text
     .replace(/&/g, '&amp;')
@@ -1355,6 +1492,10 @@ async function copyToClipboard(text) {
   }
 }
 
+/**
+ * Purpose: Handle the `downloadFromUrl` step in the application flow.
+ * How: Executes the download from url logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 async function downloadFromUrl(url, filename, fallbackError = 'Download failed') {
   const response = await fetch(url);
   if (!response.ok) {
@@ -1371,6 +1512,10 @@ async function downloadFromUrl(url, filename, fallbackError = 'Download failed')
   URL.revokeObjectURL(link.href);
 }
 
+/**
+ * Purpose: Handle the `openEditorUrl` step in the application flow.
+ * How: Executes the open editor url logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function openEditorUrl(url) {
   if (!url || typeof url !== 'string') return;
   // Fire-and-forget custom URI dispatch without leaving current page.
@@ -1430,6 +1575,10 @@ if (archiveBtn) {
   });
 }
 
+/**
+ * Purpose: Handle the `syncState` step in the application flow.
+ * How: Executes the sync state logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 async function syncState(partial) {
   try {
     const response = await fetch('/api/state', {
@@ -1448,6 +1597,10 @@ async function syncState(partial) {
   }
 }
 
+/**
+ * Purpose: Handle the `pollState` step in the application flow.
+ * How: Executes the poll state logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 async function pollState() {
   if (isShowcaseGateActive()) {
     // Keep showcase stable while onboarding overlay is visible.
@@ -1503,6 +1656,10 @@ async function pollState() {
   }
 }
 
+/**
+ * Purpose: Handle the `pollLiveSessionRefresh` step in the application flow.
+ * How: Executes the poll live session refresh logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 async function pollLiveSessionRefresh() {
   if (liveRefreshInFlight) return;
   if (!state.currentSha) return;
@@ -1547,6 +1704,10 @@ async function pollLiveSessionRefresh() {
   }
 }
 
+/**
+ * Purpose: Handle the `tickRunUsageScore` step in the application flow.
+ * How: Executes the tick run usage score logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 function tickRunUsageScore() {
   if (!state.currentSha) return;
   if (state.currentView !== 'run') return;
@@ -1556,7 +1717,7 @@ function tickRunUsageScore() {
   markSessionUsed('run-engaged-time', 1);
 }
 
-// Clic sur le label de session vide: no-op (load via drop/paste).
+// Click on the empty-session label: no-op (load through drop/paste).
 sessionLabel.addEventListener('click', (event) => {
   event.preventDefault();
   if (state.sessions.length === 0) return;
@@ -1813,6 +1974,10 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Initialisation
+/**
+ * Purpose: Handle the `init` step in the application flow.
+ * How: Executes the init logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
+ */
 async function init() {
   loadSessionOrderPreference();
   updateSessionOrderIndicator();
@@ -1829,7 +1994,7 @@ async function init() {
   // Require explicit audio unlock per opened tab.
   syncState({ audioUnlocked: false });
 
-  // Charger la version Faust pour le footer
+  // Load Faust compiler version for footer.
   if (footerVersion) {
     try {
       const response = await fetch('/api/version');
@@ -1838,11 +2003,11 @@ async function init() {
         footerVersion.textContent = result.version;
       }
     } catch {
-      // Ignorer si indisponible
+      // Ignore when unavailable.
     }
   }
 
-  // Charger la version de faustforge pour le bandeau
+  // Load faustforge app version for the header badge.
   if (headerAppVersion) {
     try {
       const response = await fetch('/api/app-version');
@@ -1851,7 +2016,7 @@ async function init() {
         headerAppVersion.textContent = `v${result.version}`;
       }
     } catch {
-      // Ignorer si indisponible
+      // Ignore when unavailable.
     }
   }
 
