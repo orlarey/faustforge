@@ -22,7 +22,8 @@ const state = {
     midiSource: 'virtual',
     uiZoom: 'auto',
     orbitZoom: '100',
-    orbitUi: null
+    orbitUi: null,
+    lastRunInteractionAt: 0
   },
   viewScroll: {
     dsp: { line: 1 },
@@ -95,6 +96,7 @@ const SESSION_ORDER_STORAGE_KEY = 'faustforge.sessionOrder.v1';
 const VIEW_FADE_DURATION_MS = 3000;
 let viewTransitionSeq = 0;
 let activeViewTransition = null;
+const RUN_USAGE_ACTIVE_WINDOW_MS = 8000;
 
 function extractLabelText(el) {
   const label = el.closest('label');
@@ -277,7 +279,7 @@ function markSessionUsed(reason = 'ui-action', weight = 1) {
       updateSessionNavigation();
     }
     if (sessionPickerOpen) {
-      renderSessionPickerList(sessionPickerSearchInput ? sessionPickerSearchInput.value || '' : '');
+      renderSessionPickerList(sessionPickerSearchInput ? sessionPickerSearchInput.value || '' : '', { autoCenter: false });
     }
   }
 
@@ -355,7 +357,7 @@ function ensureSessionPicker() {
 
   if (sessionPickerSearchInput) {
     sessionPickerSearchInput.addEventListener('input', () => {
-      renderSessionPickerList(sessionPickerSearchInput.value || '');
+      renderSessionPickerList(sessionPickerSearchInput.value || '', { autoCenter: true });
     });
   }
 
@@ -377,7 +379,7 @@ function ensureSessionPicker() {
       state.sessionIndex = idx >= 0 ? idx : state.sessions.length;
     }
     updateSessionNavigation();
-    renderSessionPickerList(sessionPickerSearchInput ? sessionPickerSearchInput.value || '' : '');
+    renderSessionPickerList(sessionPickerSearchInput ? sessionPickerSearchInput.value || '' : '', { autoCenter: true });
   });
 
   if (sessionPickerListEl) {
@@ -424,8 +426,9 @@ function positionSessionPicker() {
   sessionPickerEl.style.width = `${Math.round(width)}px`;
 }
 
-function renderSessionPickerList(rawQuery = '') {
+function renderSessionPickerList(rawQuery = '', options = {}) {
   if (!sessionPickerListEl) return;
+  const autoCenter = !!(options && options.autoCenter);
   if (sessionPickerOrderChronoBtn) {
     sessionPickerOrderChronoBtn.classList.toggle('active', state.sessionOrder === 'chronological');
   }
@@ -502,16 +505,18 @@ function renderSessionPickerList(rawQuery = '') {
   }));
   sessionPickerListEl.innerHTML = rows.join('');
 
-  // Keep current session in view and centered when possible.
-  requestAnimationFrame(() => {
-    if (!sessionPickerListEl) return;
-    const active = sessionPickerListEl.querySelector('.session-picker-item.active');
-    if (!(active instanceof HTMLElement)) return;
-    const listRect = sessionPickerListEl.getBoundingClientRect();
-    const itemRect = active.getBoundingClientRect();
-    const delta = (itemRect.top + itemRect.height / 2) - (listRect.top + listRect.height / 2);
-    sessionPickerListEl.scrollTop += delta;
-  });
+  if (autoCenter) {
+    // Keep current session in view and centered when explicitly requested.
+    requestAnimationFrame(() => {
+      if (!sessionPickerListEl) return;
+      const active = sessionPickerListEl.querySelector('.session-picker-item.active');
+      if (!(active instanceof HTMLElement)) return;
+      const listRect = sessionPickerListEl.getBoundingClientRect();
+      const itemRect = active.getBoundingClientRect();
+      const delta = (itemRect.top + itemRect.height / 2) - (listRect.top + listRect.height / 2);
+      sessionPickerListEl.scrollTop += delta;
+    });
+  }
 }
 
 function closeSessionPicker() {
@@ -540,7 +545,7 @@ function closeSessionPicker() {
 
 function openSessionPicker() {
   ensureSessionPicker();
-  renderSessionPickerList('');
+  renderSessionPickerList('', { autoCenter: true });
   positionSessionPicker();
   if (!sessionPickerEl) return;
   sessionPickerEl.classList.remove('hidden');
@@ -593,6 +598,19 @@ function getEffectiveView(viewId) {
     return 'dsp';
   }
   return viewId;
+}
+
+function hasParamDiff(prevParams, nextParams) {
+  if (!prevParams || !nextParams) return false;
+  const prevEntries = Object.entries(prevParams);
+  const nextEntries = Object.entries(nextParams);
+  if (prevEntries.length !== nextEntries.length) return true;
+  for (const [key, nextValue] of nextEntries) {
+    const prevValue = prevParams[key];
+    if (!Number.isFinite(nextValue) || !Number.isFinite(prevValue)) continue;
+    if (Math.abs(Number(nextValue) - Number(prevValue)) > 1e-6) return true;
+  }
+  return false;
 }
 
 function wait(ms) {
@@ -760,11 +778,21 @@ async function renderCurrentView(targetContainer = viewContainer) {
       },
       onRunStateChange: (snapshot) => {
         if (!state.currentSha || !snapshot) return;
+        const now = Date.now();
+        const prevAudioRunning = !!state.runGlobal.audioRunning;
+        const prevParams = state.runStateBySha[state.currentSha]?.params;
+        const prevActivityTick = Number(state.runStateBySha[state.currentSha]?.activityTick || 0);
         if (snapshot.scope) {
           state.runGlobal.scope = snapshot.scope;
         }
         if (typeof snapshot.audioRunning === 'boolean') {
           state.runGlobal.audioRunning = snapshot.audioRunning;
+          if (!prevAudioRunning && snapshot.audioRunning) {
+            state.runGlobal.lastRunInteractionAt = now;
+            markSessionUsed('run-audio-start', 2);
+          } else if (!snapshot.audioRunning) {
+            state.runGlobal.lastRunInteractionAt = 0;
+          }
         }
         if (typeof snapshot.polyVoices === 'number') {
           state.runGlobal.polyVoices = snapshot.polyVoices;
@@ -786,9 +814,23 @@ async function renderCurrentView(targetContainer = viewContainer) {
           };
         }
         if (snapshot.params) {
+          if (hasParamDiff(prevParams, snapshot.params)) {
+            state.runGlobal.lastRunInteractionAt = now;
+            markSessionUsed('run-param-change');
+          }
           state.runStateBySha[state.currentSha] = {
             ...(state.runStateBySha[state.currentSha] || {}),
             params: snapshot.params
+          };
+        }
+        if (typeof snapshot.activityTick === 'number') {
+          if (state.runGlobal.audioRunning && snapshot.activityTick > prevActivityTick) {
+            state.runGlobal.lastRunInteractionAt = now;
+            markSessionUsed('run-midi');
+          }
+          state.runStateBySha[state.currentSha] = {
+            ...(state.runStateBySha[state.currentSha] || {}),
+            activityTick: snapshot.activityTick
           };
         }
         if (snapshot.paramCells) {
@@ -1427,7 +1469,6 @@ async function pollState() {
         showAudioGate();
       }
     }
-
     if (remote.view && getEffectiveView(remote.view) !== state.currentView) {
       const now = Date.now();
       if (now < localViewStickyUntil) {
@@ -1509,11 +1550,10 @@ async function pollLiveSessionRefresh() {
 function tickRunUsageScore() {
   if (!state.currentSha) return;
   if (state.currentView !== 'run') return;
-  if (state.runGlobal.audioRunning) {
-    markSessionUsed('run-active-time', 3);
-    return;
-  }
-  markSessionUsed('run-view-time', 1);
+  if (!state.runGlobal.audioRunning) return;
+  const lastInteractionAt = Number(state.runGlobal.lastRunInteractionAt || 0);
+  if (Date.now() - lastInteractionAt > RUN_USAGE_ACTIVE_WINDOW_MS) return;
+  markSessionUsed('run-engaged-time', 1);
 }
 
 // Clic sur le label de session vide: no-op (load via drop/paste).

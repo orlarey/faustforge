@@ -39,6 +39,7 @@ let pressedUiButtons = new Set();
 let uiReleaseHandlersInstalled = false;
 let uiReleaseGuardHandler = null;
 let emitRunStateFn = null;
+let runActivityTick = 0;
 let lastSpectrumSentAt = 0;
 let lastSpectrumSummary = null;
 let lastAudioQuality = null;
@@ -655,10 +656,16 @@ export function getState() {
       threshold: scopeState.threshold,
       holdoffMs: scopeState.holdoffMs
     },
+    activityTick: runActivityTick,
     params: { ...paramValues },
     paramCells: cloneParamCells(paramCells),
     orbitUi: buildRunOrbitSnapshot(false)
   };
+}
+
+function markRunActivity() {
+  runActivityTick += 1;
+  if (emitRunStateFn) emitRunStateFn();
 }
 
 /**
@@ -2646,6 +2653,7 @@ function fingerprintRunParams(input) {
 }
 
 function noteOnMidi(note, velocity) {
+  markRunActivity();
   if (dspNode && typeof dspNode.keyOn === 'function') {
     const vel = Math.max(0, Math.min(127, Math.round(velocity * 127)));
     try {
@@ -2676,6 +2684,7 @@ function noteOnMidi(note, velocity) {
  * Envoie un note-off MIDI, soit natif DSP, soit via paramètres cibles.
  */
 function noteOffMidi(note = null) {
+  markRunActivity();
   if (dspNode && typeof dspNode.keyOff === 'function') {
     try {
       if (note !== null) {
@@ -3277,6 +3286,7 @@ export function dispose() {
   compiledUI = null;
   faustUIInstance = null;
   emitRunStateFn = null;
+  runActivityTick = 0;
   midiTargets = null;
   activeMidiNote = null;
   midiAccess = null;
