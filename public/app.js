@@ -3,56 +3,19 @@
  * Session navigation and multi-view orchestration inspired by faustservice.
  */
 import { TOOLTIP_TEXTS } from './tooltip-texts.js';
-
-// Application state.
-const state = {
-  currentSha: null,
-  currentView: 'dsp',
-  sessionOrder: 'chronological', // chronological | usage
-  views: [],
-  sessions: [],        // Sessions sorted according to sessionOrder.
-  sessionIndex: -1,    // -1 = uninitialized, sessions.length = empty-session slot.
-  dragCounter: 0,      // Counter used to balance dragenter/dragleave events.
-  runStateBySha: {},   // Run state persisted per session (params, orbit, etc.).
-  audioUnlocked: false,
-  runGlobal: {
-    audioRunning: false,
-    scope: null,
-    polyVoices: 0,
-    midiSource: 'virtual',
-    uiZoom: 'auto',
-    orbitZoom: '100',
-    orbitUi: null,
-    lastRunInteractionAt: 0
-  },
-  viewScroll: {
-    dsp: { line: 1 },
-    cpp: { line: 1 }
-  },
-  viewScrollBySha: {},
-  showcase: {
-    active: false,
-    sha: null,
-    viewTimer: null
-  }
-};
-
-const SHOWCASE_FILENAME = 'showcase-organ.dsp';
-const SHOWCASE_CODE = `import("stdfaust.lib");
-
-process = organ;
-
-organ = timbre (freq) * gate * gain * volume
-with {
-    freq = hslider("freq", 440, 40, 8000, 1);
-    gate = button("gate") : fi.lowpass(1,1);
-    gain = hslider("gain", 0, 0, 1, 0.01);
-    volume = hslider("volume", 0.25, 0, 1, 0.01);
-    timbre(f) = osc(f) * 0.5 + osc(2*f) * 0.25;
-    osc(f) = phase(f) * 2 * ma.PI : sin;
-    phase(f) = f/ma.SR : (+ : %(1.0)) ~ _;
-};
-`;
+import {
+  copyToClipboard,
+  downloadFromUrl,
+  escapeHtml,
+  getClaudeMcpConfigText,
+  hasParamDiff,
+  isTextInputTarget,
+  makeClipFilename,
+  openEditorUrl,
+  wait
+} from './app/helpers.js';
+import { createTooltipManager } from './app/ui-utils.js';
+import { SHOWCASE_CODE, SHOWCASE_FILENAME, state } from './app/state.js';
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
@@ -79,7 +42,6 @@ let lastStateTs = 0;
 let pasteSink = null;
 let localViewStickyUntil = 0;
 let lastLocalViewResyncAt = 0;
-let tooltipApplyRaf = null;
 let liveRefreshInFlight = false;
 const liveContentShaBySha = Object.create(null);
 const lastUsePingBySha = Object.create(null);
@@ -97,115 +59,7 @@ const VIEW_FADE_DURATION_MS = 3000;
 let viewTransitionSeq = 0;
 let activeViewTransition = null;
 const RUN_USAGE_ACTIVE_WINDOW_MS = 8000;
-
-/**
- * Purpose: Handle the `extractLabelText` step in the application flow.
- * How: Executes the extract label text logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
- */
-function extractLabelText(el) {
-  const label = el.closest('label');
-  if (!label) return '';
-  const clone = label.cloneNode(true);
-  clone.querySelectorAll('input, select, textarea, button').forEach((n) => n.remove());
-  return (clone.textContent || '').replace(/\s+/g, ' ').trim();
-}
-
-/**
- * Purpose: Handle the `inferTooltip` step in the application flow.
- * How: Executes the infer tooltip logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
- */
-function inferTooltip(el) {
-  if (!el || !(el instanceof HTMLElement)) return '';
-  const ariaLabel = (el.getAttribute('aria-label') || '').trim();
-  if (ariaLabel) {
-    const key = ariaLabel.toLowerCase();
-    if (TOOLTIP_TEXTS.byLabel[key]) return TOOLTIP_TEXTS.byLabel[key];
-    return ariaLabel;
-  }
-
-  if (el.id === 'session-label' && !el.classList.contains('clickable')) {
-    return 'Current session';
-  }
-
-  const byId = el.id && TOOLTIP_TEXTS.byId[el.id] ? TOOLTIP_TEXTS.byId[el.id] : '';
-  if (byId) return byId;
-
-  const labelText = extractLabelText(el);
-  if (labelText) {
-    const key = labelText.toLowerCase();
-    if (TOOLTIP_TEXTS.byLabel[key]) return TOOLTIP_TEXTS.byLabel[key];
-    if (el.tagName === 'SELECT') return `Select ${labelText.toLowerCase()}`;
-    if (el.tagName === 'INPUT') return `Set ${labelText.toLowerCase()}`;
-    return labelText;
-  }
-
-  if (el.matches('.midi-key')) {
-    const note = (el.textContent || '').trim();
-    return note ? `${TOOLTIP_TEXTS.generic.playMidiNote} ${note}` : TOOLTIP_TEXTS.generic.playMidiNote;
-  }
-
-  if (el.tagName === 'BUTTON') {
-    const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-    const key = text.toLowerCase();
-    if (TOOLTIP_TEXTS.byButtonText[key]) return TOOLTIP_TEXTS.byButtonText[key];
-    return text ? `Activate ${text.toLowerCase()}` : TOOLTIP_TEXTS.generic.activateControl;
-  }
-
-  if (el.tagName === 'SELECT') {
-    return TOOLTIP_TEXTS.generic.selectOption;
-  }
-
-  if (el.tagName === 'INPUT') {
-    const type = (el.getAttribute('type') || 'text').toLowerCase();
-    if (type === 'number' || type === 'range') return TOOLTIP_TEXTS.generic.setValue;
-    if (type === 'checkbox') return TOOLTIP_TEXTS.generic.toggleOption;
-    if (type === 'file') return TOOLTIP_TEXTS.byId['file-input'] || TOOLTIP_TEXTS.generic.enterValue;
-    return TOOLTIP_TEXTS.generic.enterValue;
-  }
-
-  if (el.tagName === 'TEXTAREA') {
-    return TOOLTIP_TEXTS.generic.enterText;
-  }
-
-  if (el.getAttribute('role') === 'button') {
-    return TOOLTIP_TEXTS.generic.activateControl;
-  }
-
-  return '';
-}
-
-/**
- * Purpose: Handle the `applyTooltips` step in the application flow.
- * How: Executes the apply tooltips logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
- */
-function applyTooltips(root = document) {
-  const selectors = [
-    'button',
-    'select',
-    'input',
-    'textarea',
-    '[role="button"]',
-    '.midi-key',
-    '#session-label.clickable'
-  ].join(', ');
-  root.querySelectorAll(selectors).forEach((el) => {
-    if (!(el instanceof HTMLElement)) return;
-    const hint = inferTooltip(el);
-    if (hint) el.setAttribute('title', hint);
-  });
-}
-
-/**
- * Purpose: Handle the `scheduleTooltipApply` step in the application flow.
- * How: Executes the schedule tooltip apply logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
- */
-function scheduleTooltipApply(root = document) {
-  if (tooltipApplyRaf) return;
-  tooltipApplyRaf = requestAnimationFrame(() => {
-    tooltipApplyRaf = null;
-    applyTooltips(root);
-  });
-}
+const { applyTooltips, scheduleTooltipApply } = createTooltipManager(TOOLTIP_TEXTS);
 /**
  * Purpose: Handle the `loadViews` step in the application flow.
  * How: Executes the load views logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
@@ -668,33 +522,6 @@ function getEffectiveView(viewId) {
   return viewId;
 }
 
-/**
- * Purpose: Handle the `hasParamDiff` step in the application flow.
- * How: Executes the has param diff logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
- */
-function hasParamDiff(prevParams, nextParams) {
-  if (!prevParams || !nextParams) return false;
-  const prevEntries = Object.entries(prevParams);
-  const nextEntries = Object.entries(nextParams);
-  if (prevEntries.length !== nextEntries.length) return true;
-  for (const [key, nextValue] of nextEntries) {
-    const prevValue = prevParams[key];
-    if (!Number.isFinite(nextValue) || !Number.isFinite(prevValue)) continue;
-    if (Math.abs(Number(nextValue) - Number(prevValue)) > 1e-6) return true;
-  }
-  return false;
-}
-
-/**
- * Purpose: Handle the `wait` step in the application flow.
- * How: Executes the wait logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
- */
-function wait(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function disposeViewById(viewId) {
   const oldView = state.views.find((v) => v.id === viewId);
   if (!oldView || typeof oldView.dispose !== 'function') return;
@@ -817,6 +644,7 @@ async function switchView(viewId, options = {}) {
  */
 async function renderCurrentView(targetContainer = viewContainer) {
   if (!state.currentSha) return;
+  const renderSha = state.currentSha;
   const effectiveView = getEffectiveView(state.currentView);
   if (effectiveView !== state.currentView) {
     state.currentView = effectiveView;
@@ -830,7 +658,7 @@ async function renderCurrentView(targetContainer = viewContainer) {
 
   try {
     const runState =
-      view.id === 'run' && state.currentSha
+      view.id === 'run' && renderSha
         ? {
             audioRunning: state.runGlobal.audioRunning,
             scope: state.runGlobal.scope,
@@ -838,18 +666,18 @@ async function renderCurrentView(targetContainer = viewContainer) {
             midiSource: state.runGlobal.midiSource,
             uiZoom: state.runGlobal.uiZoom,
             orbitZoom: state.runGlobal.orbitZoom,
-            params: state.runStateBySha[state.currentSha]?.params,
-            paramCells: state.runStateBySha[state.currentSha]?.paramCells,
-            orbitUi: state.runStateBySha[state.currentSha]?.orbitUi || state.runGlobal.orbitUi
+            params: state.runStateBySha[renderSha]?.params,
+            paramCells: state.runStateBySha[renderSha]?.paramCells,
+            orbitUi: state.runStateBySha[renderSha]?.orbitUi
           }
         : undefined;
     const perSession =
-      state.currentSha && state.viewScrollBySha[state.currentSha]
-        ? state.viewScrollBySha[state.currentSha][view.id]
+      renderSha && state.viewScrollBySha[renderSha]
+        ? state.viewScrollBySha[renderSha][view.id]
         : null;
     const scrollState = perSession || state.viewScroll[view.id];
     await view.render(targetContainer, {
-      sha: state.currentSha,
+      sha: renderSha,
       runState,
       scrollState,
       onError: (message) => {
@@ -861,11 +689,13 @@ async function renderCurrentView(targetContainer = viewContainer) {
         hideError();
       },
       onRunStateChange: (snapshot) => {
-        if (!state.currentSha || !snapshot) return;
+        if (!snapshot) return;
+        // Ignore stale callbacks coming from a previous Run instance/session.
+        if (state.currentSha !== renderSha) return;
         const now = Date.now();
         const prevAudioRunning = !!state.runGlobal.audioRunning;
-        const prevParams = state.runStateBySha[state.currentSha]?.params;
-        const prevActivityTick = Number(state.runStateBySha[state.currentSha]?.activityTick || 0);
+        const prevParams = state.runStateBySha[renderSha]?.params;
+        const prevActivityTick = Number(state.runStateBySha[renderSha]?.activityTick || 0);
         if (snapshot.scope) {
           state.runGlobal.scope = snapshot.scope;
         }
@@ -891,9 +721,8 @@ async function renderCurrentView(targetContainer = viewContainer) {
           state.runGlobal.orbitZoom = String(snapshot.orbitZoom);
         }
         if (snapshot.orbitUi && typeof snapshot.orbitUi === 'object') {
-          state.runGlobal.orbitUi = snapshot.orbitUi;
-          state.runStateBySha[state.currentSha] = {
-            ...(state.runStateBySha[state.currentSha] || {}),
+          state.runStateBySha[renderSha] = {
+            ...(state.runStateBySha[renderSha] || {}),
             orbitUi: snapshot.orbitUi
           };
         }
@@ -902,8 +731,8 @@ async function renderCurrentView(targetContainer = viewContainer) {
             state.runGlobal.lastRunInteractionAt = now;
             markSessionUsed('run-param-change');
           }
-          state.runStateBySha[state.currentSha] = {
-            ...(state.runStateBySha[state.currentSha] || {}),
+          state.runStateBySha[renderSha] = {
+            ...(state.runStateBySha[renderSha] || {}),
             params: snapshot.params
           };
         }
@@ -912,26 +741,27 @@ async function renderCurrentView(targetContainer = viewContainer) {
             state.runGlobal.lastRunInteractionAt = now;
             markSessionUsed('run-midi');
           }
-          state.runStateBySha[state.currentSha] = {
-            ...(state.runStateBySha[state.currentSha] || {}),
+          state.runStateBySha[renderSha] = {
+            ...(state.runStateBySha[renderSha] || {}),
             activityTick: snapshot.activityTick
           };
         }
         if (snapshot.paramCells) {
-          state.runStateBySha[state.currentSha] = {
-            ...(state.runStateBySha[state.currentSha] || {}),
+          state.runStateBySha[renderSha] = {
+            ...(state.runStateBySha[renderSha] || {}),
             paramCells: snapshot.paramCells
           };
         }
       },
       onScrollChange: (line) => {
         if (!scrollState || typeof line !== 'number') return;
+        if (state.currentSha !== renderSha) return;
         scrollState.line = line;
-        if (state.currentSha) {
-          if (!state.viewScrollBySha[state.currentSha]) {
-            state.viewScrollBySha[state.currentSha] = {};
+        if (renderSha) {
+          if (!state.viewScrollBySha[renderSha]) {
+            state.viewScrollBySha[renderSha] = {};
           }
-          state.viewScrollBySha[state.currentSha][view.id] = { line };
+          state.viewScrollBySha[renderSha][view.id] = { line };
           markSessionUsed('scroll');
         }
       }
@@ -1318,26 +1148,6 @@ async function submitFile(file) {
   await submitCode(code, filename);
 }
 
-function makeClipFilename() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(
-    now.getHours()
-  )}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  return `clip-${ts}.dsp`;
-}
-
-/**
- * Purpose: Handle the `isTextInputTarget` step in the application flow.
- * How: Executes the is text input target logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
- */
-function isTextInputTarget(target) {
-  if (!(target instanceof Element)) return false;
-  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
-  if (target instanceof HTMLSelectElement) return true;
-  return !!target.closest('[contenteditable="true"]');
-}
-
 function getCurrentViewIndex() {
   if (!Array.isArray(state.views) || state.views.length === 0) return -1;
   return state.views.findIndex((v) => v.id === state.currentView);
@@ -1452,80 +1262,6 @@ function hideInterface() {
     });
   }
   scheduleTooltipApply(viewContainer);
-}
-
-/**
- * Purpose: Handle the `getClaudeMcpConfigText` step in the application flow.
- * How: Executes the get claude mcp config text logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
- */
-function getClaudeMcpConfigText() {
-  return JSON.stringify(
-    {
-      mcpServers: {
-        faustforge: {
-          command: 'docker',
-          args: ['exec', '-i', 'faustforge', 'node', '/app/mcp.mjs']
-        }
-      }
-    },
-    null,
-    2
-  );
-}
-
-/**
- * Purpose: Handle the `escapeHtml` step in the application flow.
- * How: Executes the escape html logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
- */
-function escapeHtml(text) {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-async function copyToClipboard(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // ignore clipboard errors silently
-  }
-}
-
-/**
- * Purpose: Handle the `downloadFromUrl` step in the application flow.
- * How: Executes the download from url logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
- */
-async function downloadFromUrl(url, filename, fallbackError = 'Download failed') {
-  const response = await fetch(url);
-  if (!response.ok) {
-    const result = await response.json().catch(() => ({}));
-    throw new Error(result.error || fallbackError);
-  }
-  const blob = await response.blob();
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(link.href);
-}
-
-/**
- * Purpose: Handle the `openEditorUrl` step in the application flow.
- * How: Executes the open editor url logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
- */
-function openEditorUrl(url) {
-  if (!url || typeof url !== 'string') return;
-  // Fire-and-forget custom URI dispatch without leaving current page.
-  const probe = document.createElement('iframe');
-  probe.style.display = 'none';
-  probe.src = url;
-  document.body.appendChild(probe);
-  setTimeout(() => {
-    probe.remove();
-  }, 1500);
 }
 
 // Event listeners

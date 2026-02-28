@@ -1285,9 +1285,11 @@ function renderOrbitUi(container, ui) {
 
   // Ensure geometry is initialized before restoring remote state.
   orbitUiInstance.resize();
+  let baseOrbitState = null;
   orbitUiInstance.beginUpdate();
   try {
     let nextState = orbitUiInstance.buildControlsFromUnknown(ui);
+    baseOrbitState = nextState;
     if (pendingOrbitUi && typeof pendingOrbitUi === 'object') {
       nextState = mergeRemoteOrbitState(nextState, pendingOrbitUi);
     }
@@ -1303,6 +1305,9 @@ function renderOrbitUi(container, ui) {
   setupOrbitPaneResizeObserver(container);
   orbitUiInstance.resize();
   requestOrbitSyncFromParams(true);
+  if (baseOrbitState && shouldForceOrbitReprojection(baseOrbitState, orbitUiInstance.getOrbitState(), paramValues)) {
+    forceOrbitReprojection(baseOrbitState, paramValues);
+  }
   sendRunOrbitSnapshot(true);
 }
 
@@ -2163,6 +2168,10 @@ function sanitizeMergedOrbitState(baseState, mergedState) {
       y: Number(mergedState.center.y)
     }
   };
+  const baseInner = Number(baseState.innerRadius || 0);
+  const baseOuter = Number(baseState.outerRadius || 0);
+  const mergedInner = Number(mergedState.innerRadius || 0);
+  const mergedOuter = Number(mergedState.outerRadius || 0);
   // Guard against stale snapshots captured during transient invalid layout
   // where center may collapse to (0,0). Keep current base center in that case.
   const baseCenterX = Number(baseState.center?.x || 0);
@@ -2171,7 +2180,120 @@ function sanitizeMergedOrbitState(baseState, mergedState) {
     next.center.x = baseCenterX;
     next.center.y = baseCenterY;
   }
+  // Guard against stale snapshots with collapsed radii/geometry:
+  // keep current base geometry when incoming radii are implausibly small.
+  const minReasonableOuter = Math.max(24, baseOuter * 0.35);
+  const invalidRadii =
+    !Number.isFinite(mergedInner)
+    || !Number.isFinite(mergedOuter)
+    || mergedOuter <= 0
+    || mergedInner < 0
+    || mergedInner >= mergedOuter
+    || mergedOuter < minReasonableOuter;
+  if (invalidRadii && baseOuter > 0 && baseInner >= 0) {
+    next.innerRadius = baseInner;
+    next.outerRadius = baseOuter;
+    next.center.x = baseCenterX;
+    next.center.y = baseCenterY;
+    if (baseState.controls && typeof baseState.controls === 'object') {
+      const patched = { ...(next.controls || {}) };
+      for (const [path, baseCtrl] of Object.entries(baseState.controls)) {
+        const local = patched[path] || {};
+        patched[path] = {
+          ...local,
+          x: Number(baseCtrl.x),
+          y: Number(baseCtrl.y)
+        };
+      }
+      next.controls = patched;
+    }
+  }
   return next;
+}
+
+/**
+ * Purpose: Compute the value implied by a control point position in Orbit coordinates.
+ * How: Reuses Orbit radial geometry rules (inner/outer radii and control range) to map XY back to a parameter value.
+ */
+function orbitValueFromPosition(control, state) {
+  const d = Math.hypot(Number(control.x) - Number(state.center.x), Number(control.y) - Number(state.center.y));
+  const inner = Number(state.innerRadius);
+  const outer = Number(state.outerRadius);
+  const u = d <= inner
+    ? 1
+    : d >= outer
+      ? 0
+      : (outer - d) / Math.max(1e-9, outer - inner);
+  if (control.type === 'button' || control.type === 'checkbox') {
+    const threshold = (inner + outer) / 2;
+    return d <= threshold ? 1 : 0;
+  }
+  let value = Number(control.min) + u * (Number(control.max) - Number(control.min));
+  const step = Number(control.step);
+  if (Number.isFinite(step) && step > 0) {
+    const steps = Math.round((value - Number(control.min)) / step);
+    value = Number(control.min) + steps * step;
+  }
+  return clamp(value, Number(control.min), Number(control.max));
+}
+
+/**
+ * Purpose: Decide whether restored Orbit control geometry is inconsistent with current parameter values.
+ * How: Compares value implied by each point position against `paramValues` and flags restoration when mismatch ratio is high.
+ */
+function shouldForceOrbitReprojection(baseState, currentState, values) {
+  if (!baseState || !currentState || !values) return false;
+  const controls = currentState.controls && typeof currentState.controls === 'object'
+    ? Object.entries(currentState.controls)
+    : [];
+  if (controls.length === 0) return false;
+  let compared = 0;
+  let mismatched = 0;
+  for (const [path, control] of controls) {
+    const expected = values[path];
+    if (!Number.isFinite(expected)) continue;
+    compared += 1;
+    const implied = orbitValueFromPosition(control, currentState);
+    if (control.type === 'button' || control.type === 'checkbox') {
+      if (Math.round(expected) !== Math.round(implied)) mismatched += 1;
+      continue;
+    }
+    const min = Number(control.min);
+    const max = Number(control.max);
+    const range = Math.max(1e-9, max - min);
+    const step = Number(control.step);
+    const tolerance = Number.isFinite(step) && step > 0 ? (step / 2) + 1e-9 : range * 1e-3;
+    if (Math.abs(Number(expected) - Number(implied)) > tolerance) {
+      mismatched += 1;
+    }
+  }
+  if (compared === 0) return false;
+  // Trigger repair when mismatch is frequent enough to indicate a stale/invalid restore.
+  return (mismatched / compared) >= 0.25;
+}
+
+/**
+ * Purpose: Reproject Orbit points from current parameter values using stable base control directions.
+ * How: Resets XY from base control layout, reapplies state, then pushes `setParams` to position points consistently with values.
+ */
+function forceOrbitReprojection(baseState, values) {
+  if (!orbitUiInstance || !baseState || !baseState.controls) return;
+  const current = orbitUiInstance.getOrbitState();
+  const repaired = {
+    ...current,
+    controls: { ...current.controls }
+  };
+  for (const [path, baseControl] of Object.entries(baseState.controls)) {
+    const local = repaired.controls[path];
+    if (!local) continue;
+    repaired.controls[path] = {
+      ...local,
+      x: Number(baseControl.x),
+      y: Number(baseControl.y)
+    };
+  }
+  orbitUiInstance.setOrbitState(repaired);
+  orbitUiInstance.setParams(values || {});
 }
 
 /**
