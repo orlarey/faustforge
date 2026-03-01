@@ -595,38 +595,42 @@ export class SessionManager {
   }
 
   /**
+   * Build normalized session summaries from metadata files using creation order.
+   */
+  private buildSessionSummariesByCreationOrder(): SessionSummary[] {
+    const summaries: SessionSummary[] = [];
+    for (const sha1 of this.creationOrder) {
+      const metadataPath = path.join(this.sessionsDir, sha1, 'metadata.json');
+      const metadata = this.readMetadata(metadataPath);
+      if (!metadata) continue;
+      summaries.push({
+        sha1: metadata.sha1,
+        kind: metadata.kind === 'live' ? 'live' : 'static',
+        live_draft: metadata.live_draft === true,
+        filename: metadata.filename,
+        compilation_time: metadata.compilation_time,
+        last_used_time:
+          typeof metadata.last_used_time === 'number' && Number.isFinite(metadata.last_used_time)
+            ? metadata.last_used_time
+            : metadata.compilation_time,
+        usage_score:
+          typeof metadata.usage_score === 'number' && Number.isFinite(metadata.usage_score)
+            ? metadata.usage_score
+            : 0,
+        source_path: metadata.source_path,
+        source_mtime_ms: metadata.source_mtime_ms,
+        content_sha1: metadata.content_sha1
+      });
+    }
+    return summaries;
+  }
+
+  /**
    * Liste des sessions par ordre de création (du plus ancien au plus récent)
    */
   listSessionsByCreation(limit?: number): SessionSummary[] {
     this.refreshSessions();
-    const summaries: SessionSummary[] = [];
-    for (const sha1 of this.creationOrder) {
-      const metadataPath = path.join(this.sessionsDir, sha1, 'metadata.json');
-      try {
-        const metadata = this.readMetadata(metadataPath);
-        if (!metadata) continue;
-        summaries.push({
-          sha1: metadata.sha1,
-          kind: metadata.kind === 'live' ? 'live' : 'static',
-          live_draft: metadata.live_draft === true,
-          filename: metadata.filename,
-          compilation_time: metadata.compilation_time,
-          last_used_time:
-            typeof metadata.last_used_time === 'number' && Number.isFinite(metadata.last_used_time)
-              ? metadata.last_used_time
-              : metadata.compilation_time,
-          usage_score:
-            typeof metadata.usage_score === 'number' && Number.isFinite(metadata.usage_score)
-              ? metadata.usage_score
-              : 0,
-          source_path: metadata.source_path,
-          source_mtime_ms: metadata.source_mtime_ms,
-          content_sha1: metadata.content_sha1
-        });
-      } catch {
-        // Ignorer
-      }
-    }
+    const summaries = this.buildSessionSummariesByCreationOrder();
     if (limit && limit > 0) {
       return summaries.slice(-limit);
     }

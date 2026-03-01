@@ -166,32 +166,34 @@ function toDockerDesktopHostPath(input: string): string {
   return `/run/desktop/mnt/host/${drive}/${rest}`;
 }
 
-/**
- * Récupère la version du compilateur Faust via Docker
- */
-export function getFaustVersion(): Promise<string> {
-  if (cachedFaustVersion) {
-    return Promise.resolve(cachedFaustVersion);
-  }
-
+function runDockerSimple(args: string[], timeoutMs: number): Promise<{ output: string; timedOut: boolean }> {
   return new Promise((resolve) => {
-    const dockerArgs = [
-      'run',
-      '--rm',
-      DOCKER_IMAGE,
-      '-v'
-    ];
-
     let stdout = '';
     let stderr = '';
-    let killed = false;
+    let timedOut = false;
+    let finished = false;
 
-    const proc = spawn('docker', dockerArgs);
+    const proc = spawn('docker', args);
+
+    const finalize = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve({
+        output: (stdout || stderr).trim(),
+        timedOut
+      });
+    };
 
     const timer = setTimeout(() => {
-      killed = true;
-      proc.kill('SIGKILL');
-    }, VERSION_TIMEOUT_MS);
+      timedOut = true;
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        // ignore
+      }
+      finalize();
+    }, timeoutMs);
 
     proc.stdout.on('data', (data) => {
       stdout += data.toString();
@@ -201,75 +203,44 @@ export function getFaustVersion(): Promise<string> {
       stderr += data.toString();
     });
 
-    proc.on('close', () => {
-      clearTimeout(timer);
-      if (killed) {
-        resolve('Faust version unknown (timeout)');
-        return;
-      }
-      const output = (stdout || stderr).trim();
-      if (!output) {
-        resolve('Faust version unknown');
-        return;
-      }
-      const firstLine = output.split(/\r?\n/)[0].trim();
-      const versionOnly = firstLine.slice(0, 20);
-      cachedFaustVersion = versionOnly;
-      resolve(versionOnly);
-    });
-
-    proc.on('error', () => {
-      clearTimeout(timer);
-      resolve('Faust version unknown');
-    });
+    proc.on('exit', () => finalize());
+    proc.on('close', () => finalize());
+    proc.on('error', () => finalize());
   });
+}
+
+/**
+ * Récupère la version du compilateur Faust via Docker
+ */
+export async function getFaustVersion(): Promise<string> {
+  if (cachedFaustVersion) {
+    return cachedFaustVersion;
+  }
+
+  const dockerArgs = ['run', '--rm', DOCKER_IMAGE, '-v'];
+  const { output, timedOut } = await runDockerSimple(dockerArgs, VERSION_TIMEOUT_MS);
+  if (timedOut) return 'Faust version unknown (timeout)';
+  if (!output) return 'Faust version unknown';
+  const firstLine = output.split(/\r?\n/)[0].trim();
+  const versionOnly = firstLine.slice(0, 20);
+  cachedFaustVersion = versionOnly;
+  return versionOnly;
 }
 
 /**
  * Récupère l'aide du compilateur Faust (`faust -h`) via Docker.
  */
-export function getFaustHelp(): Promise<string> {
+export async function getFaustHelp(): Promise<string> {
   if (cachedFaustHelp) {
-    return Promise.resolve(cachedFaustHelp);
+    return cachedFaustHelp;
   }
-  return new Promise((resolve) => {
-    const dockerArgs = ['run', '--rm', DOCKER_IMAGE, '-h'];
-    let stdout = '';
-    let stderr = '';
-    let killed = false;
-    const proc = spawn('docker', dockerArgs);
-    const timer = setTimeout(() => {
-      killed = true;
-      proc.kill('SIGKILL');
-    }, VERSION_TIMEOUT_MS);
 
-    proc.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-    proc.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    proc.on('close', () => {
-      clearTimeout(timer);
-      if (killed) {
-        resolve('Faust help unavailable (timeout)');
-        return;
-      }
-      const output = (stdout || stderr).trim();
-      if (!output) {
-        resolve('Faust help unavailable');
-        return;
-      }
-      cachedFaustHelp = output;
-      resolve(output);
-    });
-
-    proc.on('error', () => {
-      clearTimeout(timer);
-      resolve('Faust help unavailable');
-    });
-  });
+  const dockerArgs = ['run', '--rm', DOCKER_IMAGE, '-h'];
+  const { output, timedOut } = await runDockerSimple(dockerArgs, VERSION_TIMEOUT_MS);
+  if (timedOut) return 'Faust help unavailable (timeout)';
+  if (!output) return 'Faust help unavailable';
+  cachedFaustHelp = output;
+  return output;
 }
 
 /**
