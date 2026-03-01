@@ -1972,6 +1972,69 @@ footer > * {
   box-shadow: var(--ui-focus-shadow);
 }
 
+.run-audio-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  font-size: 0.74rem;
+  color: var(--ui-text-pill);
+  border: 1px solid var(--ui-accent-border-strong);
+  border-radius: 999px;
+  overflow: hidden;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  transition: transform 0.08s ease, box-shadow 0.16s ease;
+}
+
+.run-audio-toggle > span:first-child {
+  white-space: nowrap;
+  padding: 0.12rem 0.5rem;
+  background: var(--ui-pill-bg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.run-audio-toggle-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.1rem;
+  padding: 0.12rem 0.5rem;
+  border-left: 1px solid var(--ui-accent-border-soft);
+  background: #0a0a0f;
+}
+
+.run-audio-toggle:hover .run-audio-toggle-value {
+  background: #12121a;
+}
+
+.run-audio-toggle:hover > span:first-child {
+  background: var(--ui-pill-bg-hover);
+}
+
+.run-audio-toggle:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: var(--ui-press-shadow);
+}
+
+.run-audio-toggle.is-on .run-audio-toggle-value {
+  background: #0a0a0f;
+}
+
+.run-audio-toggle.is-off .run-audio-toggle-value {
+  background: #0a0a0f;
+}
+
+.run-audio-toggle:focus-visible {
+  box-shadow: var(--ui-focus-shadow);
+  outline: none;
+}
+
+.run-audio-toggle:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .run-header-title {
   justify-self: start;
   letter-spacing: 0.06em;

@@ -1682,6 +1682,7 @@ if (audioGateButton) {
     try {
       await unlockAudioGate();
       state.audioUnlocked = true;
+      state.runGlobal.audioRunning = true;
       await syncState({ audioUnlocked: true });
       await loadEmptySession();
       hideAudioGate();

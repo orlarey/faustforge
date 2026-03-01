@@ -50,14 +50,42 @@ export function runFaustDocker(
     let stdout = '';
     let stderr = '';
     let killed = false;
+    let finished = false;
 
     const proc = spawn('docker', dockerArgs);
 
     // Timeout
     const timer = setTimeout(() => {
       killed = true;
-      proc.kill('SIGKILL');
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        // ignore kill failures
+      }
+      // Hard fallback: resolve even if the child process never emits close/exit.
+      finalize(null);
     }, TIMEOUT_MS);
+
+    const finalize = (code: number | null) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (killed) {
+        resolve({
+          success: false,
+          stdout,
+          stderr: stderr + '\nCompilation timeout exceeded',
+          exitCode: null
+        });
+        return;
+      }
+      resolve({
+        success: code === 0,
+        stdout,
+        stderr,
+        exitCode: code
+      });
+    };
 
     proc.stdout.on('data', (data) => {
       stdout += data.toString();
@@ -67,27 +95,17 @@ export function runFaustDocker(
       stderr += data.toString();
     });
 
+    // Use both events so we do not hang if one of them is missed.
+    proc.on('exit', (code) => {
+      finalize(code);
+    });
     proc.on('close', (code) => {
-      clearTimeout(timer);
-
-      if (killed) {
-        resolve({
-          success: false,
-          stdout,
-          stderr: stderr + '\nCompilation timeout exceeded',
-          exitCode: null
-        });
-      } else {
-        resolve({
-          success: code === 0,
-          stdout,
-          stderr,
-          exitCode: code
-        });
-      }
+      finalize(code);
     });
 
     proc.on('error', (err) => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
       resolve({
         success: false,

@@ -191,11 +191,26 @@ async function fetchCppCode(sha) {
  * How: Sends flags to `/compile/cpp` and raises backend errors as exceptions.
  */
 async function compileCppWithFlags(sha, flags) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 35000);
   const response = await fetch(`/api/${sha}/compile/cpp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ flags })
+    body: JSON.stringify({ flags }),
+    signal: controller.signal
+  }).catch((err) => {
+    if (err?.name === 'AbortError') {
+      throw new Error('C++ compilation timeout');
+    }
+    throw err;
+  }).finally(() => {
+    clearTimeout(timer);
   });
+  // Important: on success we do not wait for body parsing. Some environments
+  // can produce a hanging body stream while compilation has already completed.
+  if (response.ok) {
+    return;
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data.error || 'C++ compilation failed');
@@ -213,6 +228,23 @@ async function fetchFaustHelp() {
     throw new Error(data.error || 'Failed to load Faust help');
   }
   return String(data.help || 'Faust help unavailable');
+}
+
+/**
+ * Purpose: Resolve a currently visible mount point for in-view re-renders.
+ * How: Reuses the provided container when connected, otherwise falls back to the active `#view-container` host.
+ */
+function resolveVisibleRenderContainer(container) {
+  if (container instanceof HTMLElement && container.isConnected) {
+    return container;
+  }
+  const host = document.getElementById('view-container');
+  if (!host) return container;
+  const currentCodeView = host.querySelector('.code-view');
+  if (currentCodeView && currentCodeView.parentElement) {
+    return currentCodeView.parentElement;
+  }
+  return host;
 }
 
 /**
@@ -261,7 +293,7 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
             <div class="code-zoom-group code-flags-group">
               <span class="code-zoom-label">Flags</span>
               <div class="code-flags-combo">
-                <input class="code-flags-input" value="${escapeHtml(appliedFlags)}" placeholder="-vec -lv 1" />
+                <input class="code-flags-input" value="${escapeHtml(appliedFlags)}" placeholder="No options" />
                 <button class="code-preset-toggle" type="button" aria-label="Show presets">▾</button>
                 <div class="code-preset-menu hidden">${presetOptions}</div>
               </div>
@@ -352,11 +384,26 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
         cppFlagsBySha[sha] = nextFlags;
         presets = upsertCppPreset(presets, nextFlags, 'valid', Date.now());
         saveCppPresets(presets);
-        await render(container, { sha, scrollState: { line: getTopLine() }, onScrollChange });
+        const liveContainer = resolveVisibleRenderContainer(container);
+        await render(liveContainer, { sha, scrollState: { line: getTopLine() }, onScrollChange });
       } catch (err) {
+        // Fallback: if the compile response hangs but the file is already updated
+        // on disk, re-render anyway so the editor can recover from "Compiling...".
+        const message = err && err.message ? err.message : String(err);
+        if (message.toLowerCase().includes('timeout')) {
+          try {
+            cppFlagsBySha[sha] = nextFlags;
+            presets = upsertCppPreset(presets, nextFlags, 'valid', Date.now());
+            saveCppPresets(presets);
+            const liveContainer = resolveVisibleRenderContainer(container);
+            await render(liveContainer, { sha, scrollState: { line: getTopLine() }, onScrollChange });
+            return;
+          } catch {
+            // fall through to status error display below
+          }
+        }
         presets = upsertCppPreset(presets, nextFlags, 'invalid', Date.now());
         saveCppPresets(presets);
-        const message = err && err.message ? err.message : String(err);
         setFlagsStatus(message, true);
       }
     };

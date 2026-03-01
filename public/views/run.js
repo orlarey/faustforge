@@ -170,13 +170,10 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       <span class="run-note run-header-title">RUN</span>
       <div class="run-midi-inline hidden" id="run-midi-inline"></div>
       <div class="run-header-controls">
-        <div class="run-header-pill">
+        <button id="run-audio-toggle" class="run-audio-toggle is-off" type="button" aria-label="Audio state" aria-pressed="false">
           <span>Audio</span>
-          <select id="run-audio-state" aria-label="Audio state">
-            <option value="off">Off</option>
-            <option value="on">On</option>
-          </select>
-        </div>
+          <span id="run-audio-toggle-value" class="run-audio-toggle-value">Off</span>
+        </button>
         <label class="run-header-pill">
           <span>Mode</span>
           <select id="run-mode">
@@ -261,7 +258,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     }
   };
 
-  const audioStateSelect = runRoot.querySelector('#run-audio-state');
+  const audioToggleButton = runRoot.querySelector('#run-audio-toggle');
+  const audioToggleValue = runRoot.querySelector('#run-audio-toggle-value');
   const modeSelect = runRoot.querySelector('#run-mode');
   const midiInputSelect = runRoot.querySelector('#midi-input');
   const midiInlineEl = runRoot.querySelector('#run-midi-inline');
@@ -280,8 +278,20 @@ export async function render(container, { sha, runState, onRunStateChange }) {
    * How: Executes the set audio toggle state logic to update audio, MIDI, UI, or synchronization state as needed.
    */
   const setAudioToggleState = (isOn) => {
-    if (!audioStateSelect) return;
-    audioStateSelect.value = isOn ? 'on' : 'off';
+    if (!audioToggleButton || !audioToggleValue) return;
+    const safeIsOn = !!isOn;
+    audioToggleButton.classList.toggle('is-on', safeIsOn);
+    audioToggleButton.classList.toggle('is-off', !safeIsOn);
+    audioToggleButton.setAttribute('aria-pressed', safeIsOn ? 'true' : 'false');
+    audioToggleValue.textContent = safeIsOn ? 'On' : 'Off';
+  };
+  /**
+   * Purpose: Provide the `setAudioToggleDisabled` step in the Run view runtime flow.
+   * How: Executes the set audio toggle disabled logic to update audio, MIDI, UI, or synchronization state as needed.
+   */
+  const setAudioToggleDisabled = (disabled) => {
+    if (!audioToggleButton) return;
+    audioToggleButton.disabled = !!disabled;
   };
 
   function updateRunNote() {
@@ -303,6 +313,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   updateRunNote();
 
   scopeState = createScopeState(scopeCanvas);
+  drawScopePlaceholder(scopeState);
   applyRunState(runState, {
     scopeView,
     scopeScale,
@@ -339,26 +350,32 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   emitRunStateFn = emitRunState;
   scopeView.addEventListener('change', () => {
     scopeState.view = scopeView.value;
+    if (!audioRunning) drawScopePlaceholder(scopeState);
     emitRunState();
   });
   scopeScale.addEventListener('change', () => {
     scopeState.spectrumScale = scopeScale.value;
+    if (!audioRunning) drawScopePlaceholder(scopeState);
     emitRunState();
   });
   scopeMode.addEventListener('change', () => {
     scopeState.mode = scopeMode.value;
+    if (!audioRunning) drawScopePlaceholder(scopeState);
     emitRunState();
   });
   scopeSlope.addEventListener('change', () => {
     scopeState.slope = scopeSlope.value;
+    if (!audioRunning) drawScopePlaceholder(scopeState);
     emitRunState();
   });
   scopeThreshold.addEventListener('change', () => {
     scopeState.threshold = parseFloat(scopeThreshold.value);
+    if (!audioRunning) drawScopePlaceholder(scopeState);
     emitRunState();
   });
   scopeHoldoff.addEventListener('change', () => {
     scopeState.holdoffMs = parseFloat(scopeHoldoff.value);
+    if (!audioRunning) drawScopePlaceholder(scopeState);
     emitRunState();
   });
 
@@ -458,7 +475,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     isSwitchingPolyphony = true;
     polyVoices = safeVoices;
     modeSelect.value = polyVoices > 0 ? String(polyVoices) : 'mono';
-    audioStateSelect.disabled = true;
+    setAudioToggleDisabled(true);
     setAudioToggleState(audioRunning);
     emitRunState();
     const wasRunning = audioRunning;
@@ -482,7 +499,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
         throw err;
       }
     } finally {
-      audioStateSelect.disabled = false;
+      setAudioToggleDisabled(false);
       isSwitchingPolyphony = false;
     }
   }
@@ -498,7 +515,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     await applyPolyphonyChange(voices);
   });
 
-  audioStateSelect.disabled = true;
+  setAudioToggleDisabled(true);
   setAudioToggleState(audioRunning);
 
   try {
@@ -520,7 +537,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       controlsEl.innerHTML = `<div class="error">Error: ${message}</div>`;
     }
   } finally {
-    audioStateSelect.disabled = false;
+    setAudioToggleDisabled(false);
     finalizeRunMount();
   }
 
@@ -530,7 +547,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
    */
   const startAudio = async () => {
     if (audioRunning) return;
-    audioStateSelect.disabled = true;
+    setAudioToggleDisabled(true);
     setAudioToggleState(false);
 
     try {
@@ -586,7 +603,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
         `;
       }
     } finally {
-      audioStateSelect.disabled = false;
+      setAudioToggleDisabled(false);
     }
   };
 
@@ -603,12 +620,12 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     emitRunState();
   };
 
-  audioStateSelect.addEventListener('change', async () => {
-    if (audioStateSelect.disabled) return;
-    if (audioStateSelect.value === 'on') {
-      await startAudio();
-    } else {
+  audioToggleButton.addEventListener('click', async () => {
+    if (audioToggleButton.disabled) return;
+    if (audioRunning) {
       stopAudio();
+    } else {
+      await startAudio();
     }
   });
 
@@ -4016,7 +4033,7 @@ async function resumeAudioContext() {
   }
   if (audioContext.state !== 'running') {
     throw new Error(
-      'Audio start blocked by browser policy. Click "Audio | Off" once in Run view to unlock audio.'
+      'Audio start blocked by browser policy. Click "Audio : Off" once in Run view to unlock audio.'
     );
   }
 }
@@ -4093,6 +4110,30 @@ function drawScope(scope, data) {
   ctx.moveTo(0, tY);
   ctx.lineTo(innerWidth, tY);
   ctx.stroke();
+}
+
+/**
+ * Purpose: Provide the `drawScopePlaceholder` step in the Run view runtime flow.
+ * How: Executes the draw scope placeholder logic to keep the scope grid visible when audio rendering is inactive.
+ */
+function drawScopePlaceholder(scope) {
+  if (!scope || !scope.ctx || !scope.canvas) return;
+  resizeCanvasToDisplaySize(scope.canvas, scope.ctx);
+  const { ctx, canvas } = scope;
+  const { width, height } = getCanvasSize(canvas);
+  const innerWidth = Math.max(0, width - 1);
+  const innerHeight = Math.max(0, height - 1);
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, width, height);
+  if (scope.view === 'freq') {
+    drawSpectrumGrid(ctx, innerWidth, innerHeight, scope);
+    const fmin = scope.spectrumScale === 'linear' ? 0 : 20;
+    const fmax = scope.sampleRate ? scope.sampleRate / 2 : 22050;
+    drawFreqAxis(ctx, innerWidth, innerHeight, fmin, fmax, scope.spectrumScale);
+  } else {
+    drawScopeGrid(ctx, innerWidth, innerHeight);
+  }
 }
 
 /**
