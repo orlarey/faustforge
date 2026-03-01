@@ -54,6 +54,8 @@ let sessionPickerOpen = false;
 let sessionPickerDocPointerDownHandler = null;
 let sessionPickerDocKeydownHandler = null;
 let sessionPickerResizeHandler = null;
+let runRenderTokenSeq = 0;
+const activeRunRenderTokenBySha = Object.create(null);
 const SESSION_ORDER_STORAGE_KEY = 'faustforge.sessionOrder.v1';
 const VIEW_FADE_DURATION_MS = 3000;
 let viewTransitionSeq = 0;
@@ -224,6 +226,48 @@ function formatSessionEntryLabel(session) {
 }
 
 /**
+ * Purpose: Build one canonical ordered list used by both menu rendering and arrow navigation.
+ * How: Returns sessions ordered as shown to users: empty slot first, then newest->oldest (chronological) or high->low (usage).
+ */
+function getDisplayOrderedSessions() {
+  if (state.sessionOrder === 'chronological') {
+    return state.sessions
+      .map((session, sourceIndex) => ({ session, sourceIndex }))
+      .reverse();
+  }
+  return state.sessions.map((session, sourceIndex) => ({ session, sourceIndex }));
+}
+
+/**
+ * Purpose: Resolve the current cursor position inside the canonical display order.
+ * How: Maps empty session to position 0, and active sessions to their index in `getDisplayOrderedSessions` plus one.
+ */
+function getCurrentDisplayPosition() {
+  if (!state.currentSha) return 0;
+  const ordered = getDisplayOrderedSessions();
+  const index = ordered.findIndex((entry) => entry.session.sha1 === state.currentSha);
+  if (index < 0) return 0;
+  return index + 1;
+}
+
+/**
+ * Purpose: Load a target entry from the canonical display order.
+ * How: Position 0 loads empty; any other position resolves the mapped source index and loads that session.
+ */
+async function loadSessionAtDisplayPosition(position) {
+  const ordered = getDisplayOrderedSessions();
+  const total = ordered.length + 1;
+  if (!Number.isInteger(position) || position < 0 || position >= total) return;
+  if (position === 0) {
+    await loadEmptySession();
+    return;
+  }
+  const target = ordered[position - 1];
+  if (!target) return;
+  await loadSessionByIndex(target.sourceIndex);
+}
+
+/**
  * Purpose: Handle the `ensureSessionPicker` step in the application flow.
  * How: Executes the ensure session picker logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
@@ -342,11 +386,7 @@ function renderSessionPickerList(rawQuery = '', options = {}) {
     sessionPickerOrderUsageBtn.classList.toggle('active', state.sessionOrder === 'usage');
   }
   const query = String(rawQuery || '').trim().toLowerCase();
-  const sessions = state.sessions.slice();
-  if (state.sessionOrder === 'chronological') {
-    // Chronological menu is displayed newest -> oldest.
-    sessions.reverse();
-  }
+  const sessions = getDisplayOrderedSessions().map((entry) => entry.session);
   const filteredSessions = query
     ? sessions.filter((s) => {
       const idText = s.kind === 'live' ? `live:${s.sha1.slice(5, 13)}` : s.sha1.slice(0, 8);
@@ -645,6 +685,7 @@ async function switchView(viewId, options = {}) {
 async function renderCurrentView(targetContainer = viewContainer) {
   if (!state.currentSha) return;
   const renderSha = state.currentSha;
+  const runRenderToken = (viewSelect && state.currentView === 'run') ? ++runRenderTokenSeq : 0;
   const effectiveView = getEffectiveView(state.currentView);
   if (effectiveView !== state.currentView) {
     state.currentView = effectiveView;
@@ -657,6 +698,9 @@ async function renderCurrentView(targetContainer = viewContainer) {
   targetContainer.innerHTML = '<div class="loading">Loading...</div>';
 
   try {
+    if (view.id === 'run') {
+      activeRunRenderTokenBySha[renderSha] = runRenderToken || (++runRenderTokenSeq);
+    }
     const runState =
       view.id === 'run' && renderSha
         ? {
@@ -692,6 +736,11 @@ async function renderCurrentView(targetContainer = viewContainer) {
         if (!snapshot) return;
         // Ignore stale callbacks coming from a previous Run instance/session.
         if (state.currentSha !== renderSha) return;
+        if (view.id === 'run') {
+          const activeToken = Number(activeRunRenderTokenBySha[renderSha] || 0);
+          const callbackToken = Number(runRenderToken || 0);
+          if (callbackToken <= 0 || activeToken !== callbackToken) return;
+        }
         const now = Date.now();
         const prevAudioRunning = !!state.runGlobal.audioRunning;
         const prevParams = state.runStateBySha[renderSha]?.params;
@@ -756,6 +805,11 @@ async function renderCurrentView(targetContainer = viewContainer) {
       onScrollChange: (line) => {
         if (!scrollState || typeof line !== 'number') return;
         if (state.currentSha !== renderSha) return;
+        if (view.id === 'run') {
+          const activeToken = Number(activeRunRenderTokenBySha[renderSha] || 0);
+          const callbackToken = Number(runRenderToken || 0);
+          if (callbackToken <= 0 || activeToken !== callbackToken) return;
+        }
         scrollState.line = line;
         if (renderSha) {
           if (!state.viewScrollBySha[renderSha]) {
@@ -811,13 +865,15 @@ function refreshSessionIndex() {
  */
 function updateSessionNavigation() {
   const isEmpty = state.sessionIndex >= state.sessions.length || state.sessionIndex < 0;
+  const currentDisplayPos = getCurrentDisplayPosition();
+  const totalDisplayItems = state.sessions.length + 1;
 
   if (isEmpty) {
     // Empty session.
     sessionLabel.textContent = 'Empty | Drop .dsp';
     sessionLabel.classList.add('clickable');
-    sessionPrev.disabled = state.sessions.length === 0;
-    sessionNext.disabled = true;
+    sessionPrev.disabled = currentDisplayPos >= totalDisplayItems - 1;
+    sessionNext.disabled = currentDisplayPos <= 0;
     if (deleteSessionBtn) deleteSessionBtn.classList.add('hidden');
     if (refreshSessionBtn) refreshSessionBtn.classList.add('hidden');
     if (editSessionBtn) editSessionBtn.classList.add('hidden');
@@ -832,8 +888,8 @@ function updateSessionNavigation() {
       : `${session.sha1.slice(0, 8)}…`;
     sessionLabel.textContent = `${isLive ? 'LIVE | ' : ''}${shortId} | ${session.filename}${isDraft ? ' (draft)' : ''}`;
     sessionLabel.classList.add('clickable');
-    sessionPrev.disabled = state.sessionIndex === 0;
-    sessionNext.disabled = false; // Keep access to the empty-session slot.
+    sessionPrev.disabled = currentDisplayPos >= totalDisplayItems - 1;
+    sessionNext.disabled = currentDisplayPos <= 0;
     if (deleteSessionBtn) deleteSessionBtn.classList.remove('hidden');
     if (refreshSessionBtn) refreshSessionBtn.classList.remove('hidden');
     if (editSessionBtn) {
@@ -852,25 +908,18 @@ function updateSessionNavigation() {
  * How: Executes the navigate to previous logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function navigateToPrevious() {
-  if (state.sessionIndex > 0) {
-    state.sessionIndex--;
-    await loadSessionByIndex(state.sessionIndex);
-  }
+  const currentDisplayPos = getCurrentDisplayPosition();
+  const target = currentDisplayPos + 1;
+  await loadSessionAtDisplayPosition(target);
 }
 /**
  * Purpose: Handle the `navigateToNext` step in the application flow.
  * How: Executes the navigate to next logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
 async function navigateToNext() {
-  if (state.sessionIndex < state.sessions.length) {
-    state.sessionIndex++;
-    if (state.sessionIndex < state.sessions.length) {
-      await loadSessionByIndex(state.sessionIndex);
-    } else {
-      // Move to the empty-session slot.
-      await loadEmptySession();
-    }
-  }
+  const currentDisplayPos = getCurrentDisplayPosition();
+  const target = currentDisplayPos - 1;
+  await loadSessionAtDisplayPosition(target);
 }
 /**
  * Purpose: Handle the `loadSessionByIndex` step in the application flow.
@@ -891,6 +940,7 @@ async function loadSessionByIndex(index) {
 
   updateSessionNavigation();
   hideError();
+  await syncState({ sha1: session.sha1, view: state.currentView });
 
   // Load session compilation/runtime errors.
   try {
@@ -907,7 +957,6 @@ async function loadSessionByIndex(index) {
 
   showInterface();
   await renderCurrentView();
-  syncState({ sha1: session.sha1, view: state.currentView });
 }
 /**
  * Purpose: Handle the `loadEmptySession` step in the application flow.
@@ -922,8 +971,8 @@ async function loadEmptySession() {
 
   updateSessionNavigation();
   hideError();
+  await syncState({ sha1: null, view: state.currentView });
   hideInterface();
-  syncState({ sha1: null, view: state.currentView });
 }
 /**
  * Purpose: Handle the `showLoading` step in the application flow.

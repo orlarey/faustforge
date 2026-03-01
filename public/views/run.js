@@ -97,6 +97,8 @@ let orbitUiBatchDepth = 0;
 let orbitUiBatchSnapshotPending = false;
 let orbitPaneResizeObserver = null;
 let orbitPaneResizeRaf = null;
+let orbitLayoutRetryTimer = null;
+let runRenderSeq = 0;
 let remoteSyncInFlight = false;
 // Owner identifier used by this front instance while a local UI interaction is active.
 const LOCAL_RUN_UI_OWNER = 'ui:run';
@@ -108,6 +110,23 @@ const ORBIT_PARAM_SYNC_INTERVAL_MS = 33;
 const ORBIT_POSITION_EPSILON = 0.25;
 const paramSmooth = new Map();
 const localOwnerReleaseTimers = new Map();
+const STALE_RUN_RENDER_ERROR = 'STALE_RUN_RENDER';
+
+function createStaleRunRenderError() {
+  const err = new Error(STALE_RUN_RENDER_ERROR);
+  err.name = STALE_RUN_RENDER_ERROR;
+  return err;
+}
+
+function isStaleRunRenderError(err) {
+  return !!(err && typeof err === 'object' && err.name === STALE_RUN_RENDER_ERROR);
+}
+
+function throwIfStaleRender(isStale) {
+  if (typeof isStale === 'function' && isStale()) {
+    throw createStaleRunRenderError();
+  }
+}
 
 /**
  * Purpose: Provide the `getName` step in the Run view runtime flow.
@@ -125,7 +144,9 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   // Live auto-refresh can re-render Run without a view switch.
   // Ensure no timer/listener/audio instance from a previous Run render survives.
   dispose();
+  const renderSeq = ++runRenderSeq;
   currentSha = sha;
+  const isRenderStale = () => renderSeq !== runRenderSeq || currentSha !== sha;
   runViewEnteredAt = Date.now();
   lastSpectrumSummary = null;
   lastAudioQuality = null;
@@ -411,13 +432,20 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       cleanupAudio();
       compiledGenerator = null;
       compiledGeneratorMode = 'mono';
-      await compileAndRenderUI(controlsEl, sha, polyVoices);
+      await compileAndRenderUI(controlsEl, sha, polyVoices, { isStale: isRenderStale });
+      throwIfStaleRender(isRenderStale);
       await updateMidi();
+      throwIfStaleRender(isRenderStale);
       await publishPolyphonyState();
+      throwIfStaleRender(isRenderStale);
       if (wasRunning) {
         await startAudio();
       } else {
         setAudioToggleState(false);
+      }
+    } catch (err) {
+      if (!isStaleRunRenderError(err)) {
+        throw err;
       }
     } finally {
       audioStateSelect.disabled = false;
@@ -445,10 +473,13 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   setAudioToggleState(audioRunning);
 
   try {
-    await compileAndRenderUI(controlsEl, sha, polyVoices);
+    await compileAndRenderUI(controlsEl, sha, polyVoices, { isStale: isRenderStale });
+    throwIfStaleRender(isRenderStale);
     await updateMidi();
+    throwIfStaleRender(isRenderStale);
     setAudioToggleState(audioRunning);
   } catch (err) {
+    if (isStaleRunRenderError(err)) return;
     setAudioToggleState(false);
     const message = err && err.message ? err.message : String(err);
     controlsContent.innerHTML = `<div class="error">Error: ${message}</div>`;
@@ -468,7 +499,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     try {
       const desiredMode = polyVoices > 0 ? `poly:${polyVoices}` : 'mono';
       if (!compiledGenerator || compiledGeneratorMode !== desiredMode) {
-        await compileAndRenderUI(controlsEl, sha, polyVoices);
+        await compileAndRenderUI(controlsEl, sha, polyVoices, { isStale: isRenderStale });
+        throwIfStaleRender(isRenderStale);
       }
       if (!compiledGenerator) {
         throw new Error('Compilation failed');
@@ -485,6 +517,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       }
       applyParamValues();
       await resumeAudioContext();
+      throwIfStaleRender(isRenderStale);
       setAudioLocked(false);
       startAudioOutput();
       startParamPolling();
@@ -492,6 +525,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       setAudioToggleState(true);
       emitRunState();
     } catch (err) {
+      if (isStaleRunRenderError(err)) return;
       console.error('Run view error:', err);
       const message = err && err.message ? err.message : String(err);
       const isLocked =
@@ -533,27 +567,6 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       stopAudio();
     }
   });
-
-  /**
-   * Purpose: Provide the `handleRunAreaClick` step in the Run view runtime flow.
-   * How: Executes the handle run area click logic to update audio, MIDI, UI, or synchronization state as needed.
-   */
-  const handleRunAreaClick = async (event) => {
-    if (audioStateSelect.disabled) return;
-    const target = event.target;
-    const inUiRoot = !!(currentUiRoot && target instanceof Element && currentUiRoot.contains(target));
-    const inOrbit = !!(controlsOrbitPane && target instanceof Element && controlsOrbitPane.contains(target));
-    if (inUiRoot || inOrbit) {
-      return;
-    }
-    if (audioRunning) {
-      stopAudio();
-    } else {
-      await startAudio();
-    }
-  };
-
-  controlsEl.addEventListener('click', handleRunAreaClick);
 
   remoteSyncTimer = setInterval(syncRemoteRunState, 120);
   await syncRemoteRunState();
@@ -627,7 +640,11 @@ async function syncRemoteRunState() {
 
       if (remote.runTransport && typeof remote.runTransport.nonce === 'number') {
         const cmd = remote.runTransport;
-        if (cmd.nonce !== lastAppliedTransportNonce) {
+        if (cmd.nonce < runViewEnteredAt) {
+          // Ignore stale transport commands created before entering this Run instance.
+          // Still advance local nonce tracker to avoid re-checking the same stale command forever.
+          lastAppliedTransportNonce = Math.max(lastAppliedTransportNonce, cmd.nonce);
+        } else if (cmd.nonce !== lastAppliedTransportNonce) {
           lastAppliedTransportNonce = cmd.nonce;
           if (!isSwitchingPolyphony) {
             if (cmd.action === 'start') {
@@ -731,12 +748,16 @@ function markRunActivity() {
  * Purpose: Provide the `compileAndRenderUI` step in the Run view runtime flow.
  * How: Executes the compile and render ui logic to update audio, MIDI, UI, or synchronization state as needed.
  */
-async function compileAndRenderUI(container, sha, voices = 0) {
+async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
+  const isStale = options && typeof options.isStale === 'function' ? options.isStale : null;
+  throwIfStaleRender(isStale);
   const codeResponse = await fetch(`/api/${sha}/user_code.dsp`);
+  throwIfStaleRender(isStale);
   if (!codeResponse.ok) {
     throw new Error('DSP code not found');
   }
   const code = await codeResponse.text();
+  throwIfStaleRender(isStale);
 
   const {
     FaustCompiler,
@@ -745,6 +766,7 @@ async function compileAndRenderUI(container, sha, voices = 0) {
     FaustPolyDspGenerator,
     instantiateFaustModuleFromFile
   } = await import('../vendor/faustwasm/index.js');
+  throwIfStaleRender(isStale);
 
   const base = `${window.location.origin}/libfaust-wasm/libfaust-wasm.js`;
   const module = await instantiateFaustModuleFromFile(
@@ -752,9 +774,11 @@ async function compileAndRenderUI(container, sha, voices = 0) {
     base.replace(/\.js$/, '.data'),
     base.replace(/\.js$/, '.wasm')
   );
+  throwIfStaleRender(isStale);
   const compiler = new FaustCompiler(new LibFaust(module));
   const generator = voices > 0 ? new FaustPolyDspGenerator() : new FaustMonoDspGenerator();
   const compiled = await generator.compile(compiler, 'dsp', code, '-ftz 2');
+  throwIfStaleRender(isStale);
   if (!compiled) {
     throw new Error('Compilation failed');
   }
@@ -784,6 +808,7 @@ async function compileAndRenderUI(container, sha, voices = 0) {
   } catch {
     // ignore
   }
+  throwIfStaleRender(isStale);
   const prepared = prepareControlsContainer(container);
   controlsBg = prepared.bg;
   controlsContent = prepared.content;
@@ -1305,10 +1330,38 @@ function renderOrbitUi(container, ui) {
   setupOrbitPaneResizeObserver(container);
   orbitUiInstance.resize();
   requestOrbitSyncFromParams(true);
+  enforceOrbitGeometryFromParams(paramValues);
+  scheduleOrbitLayoutRecovery();
   if (baseOrbitState && shouldForceOrbitReprojection(baseOrbitState, orbitUiInstance.getOrbitState(), paramValues)) {
     forceOrbitReprojection(baseOrbitState, paramValues);
   }
   sendRunOrbitSnapshot(true);
+}
+
+/**
+ * Purpose: Recover Orbit drawing when pane dimensions are transiently zero during a session switch.
+ * How: Retries resize/reprojection briefly until the orbit body has stable dimensions.
+ */
+function scheduleOrbitLayoutRecovery(attempt = 0) {
+  if (!orbitUiInstance) return;
+  orbitUiInstance.resize();
+  enforceOrbitGeometryFromParams(paramValues);
+  const body = orbitUiInstance.body;
+  const width = body && Number.isFinite(body.clientWidth) ? body.clientWidth : 0;
+  const height = body && Number.isFinite(body.clientHeight) ? body.clientHeight : 0;
+  if (width >= 2 && height >= 2) {
+    requestOrbitSyncFromParams(true);
+    return;
+  }
+  if (attempt >= 8) return;
+  if (orbitLayoutRetryTimer) {
+    clearTimeout(orbitLayoutRetryTimer);
+    orbitLayoutRetryTimer = null;
+  }
+  orbitLayoutRetryTimer = setTimeout(() => {
+    orbitLayoutRetryTimer = null;
+    scheduleOrbitLayoutRecovery(attempt + 1);
+  }, 80);
 }
 
 /**
@@ -1324,6 +1377,7 @@ function setupOrbitPaneResizeObserver(container) {
       orbitPaneResizeRaf = null;
       if (!orbitUiInstance) return;
       orbitUiInstance.resize();
+      enforceOrbitGeometryFromParams(paramValues);
     });
   });
   orbitPaneResizeObserver.observe(container);
@@ -2086,7 +2140,10 @@ function sendRunOrbitSnapshot(force = false) {
   fetch('/api/state', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ runOrbitUi: snapshot })
+    body: JSON.stringify({
+      runStateSha: currentSha,
+      runOrbitUi: snapshot
+    })
   }).catch(() => {});
 }
 
@@ -2101,22 +2158,28 @@ function applyRemoteOrbitUi(remoteOrbit) {
     return;
   }
   const base = orbitUiInstance.getOrbitState();
-  const merged = mergeRemoteOrbitState(base, remoteOrbit);
+  const merged = mergeRemoteOrbitState(base, remoteOrbit, { preserveCenter: true });
   orbitUiInstance.setOrbitState(merged);
+  enforceOrbitGeometryFromParams(paramValues);
 }
 
 /**
  * Purpose: Provide the `mergeRemoteOrbitState` step in the Run view runtime flow.
  * How: Executes the merge remote orbit state logic to update audio, MIDI, UI, or synchronization state as needed.
  */
-function mergeRemoteOrbitState(baseState, remoteOrbit) {
+function mergeRemoteOrbitState(baseState, remoteOrbit, options = {}) {
+  const preserveCenter = !!(options && options.preserveCenter === true);
   const next = {
     zoom: Number.isFinite(remoteOrbit.zoom) ? Number(remoteOrbit.zoom) : baseState.zoom,
     center: {
-      x: Number.isFinite(remoteOrbit.center && remoteOrbit.center.x)
+      x: preserveCenter
+        ? baseState.center.x
+        : Number.isFinite(remoteOrbit.center && remoteOrbit.center.x)
         ? Number(remoteOrbit.center.x)
         : baseState.center.x,
-      y: Number.isFinite(remoteOrbit.center && remoteOrbit.center.y)
+      y: preserveCenter
+        ? baseState.center.y
+        : Number.isFinite(remoteOrbit.center && remoteOrbit.center.y)
         ? Number(remoteOrbit.center.y)
         : baseState.center.y
     },
@@ -2238,6 +2301,78 @@ function orbitValueFromPosition(control, state) {
 }
 
 /**
+ * Purpose: Compute the expected radial distance for a parameter value in current Orbit geometry.
+ * How: Applies the same inner/outer normalization as Orbit so value==min always maps exactly to outerRadius.
+ */
+function orbitDistanceFromValue(control, state, value) {
+  const min = Number(control.min);
+  const max = Number(control.max);
+  const inner = Number(state.innerRadius);
+  const outer = Number(state.outerRadius);
+  const v = Number.isFinite(value) ? Number(value) : min;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(inner) || !Number.isFinite(outer) || max <= min) {
+    return outer;
+  }
+  const u = clamp((v - min) / (max - min), 0, 1);
+  return outer - u * (outer - inner);
+}
+
+/**
+ * Purpose: Force Orbit control geometry to match current parameter values exactly.
+ * How: Reprojects each control along its current angular direction to the exact target radius for its parameter value.
+ */
+function enforceOrbitGeometryFromParams(values) {
+  if (!orbitUiInstance || !values || typeof values !== 'object') return false;
+  const current = orbitUiInstance.getOrbitState();
+  const controls = current.controls && typeof current.controls === 'object'
+    ? Object.entries(current.controls)
+    : [];
+  if (controls.length === 0) return false;
+
+  const repaired = {
+    ...current,
+    controls: { ...current.controls }
+  };
+  const tolerance = 0.75;
+  let changed = false;
+  const sortedPaths = controls.map(([path]) => path).sort();
+  const total = Math.max(1, sortedPaths.length);
+
+  for (const [path, control] of controls) {
+    const expected = values[path];
+    if (!Number.isFinite(expected)) continue;
+    const dxRaw = Number(control.x) - Number(current.center.x);
+    const dyRaw = Number(control.y) - Number(current.center.y);
+    const mag = Math.hypot(dxRaw, dyRaw);
+    let dx = 0;
+    let dy = -1;
+    if (mag > 1e-6) {
+      dx = dxRaw / mag;
+      dy = dyRaw / mag;
+    } else {
+      const idx = Math.max(0, sortedPaths.indexOf(path));
+      const angle = (idx / total) * Math.PI * 2 - Math.PI / 2;
+      dx = Math.cos(angle);
+      dy = Math.sin(angle);
+    }
+    const targetDistance = orbitDistanceFromValue(control, current, Number(expected));
+    if (Math.abs(mag - targetDistance) <= tolerance) continue;
+    const nextX = clamp(Number(current.center.x) + dx * targetDistance, 0, Number.MAX_SAFE_INTEGER);
+    const nextY = clamp(Number(current.center.y) + dy * targetDistance, 0, Number.MAX_SAFE_INTEGER);
+    repaired.controls[path] = {
+      ...control,
+      x: nextX,
+      y: nextY
+    };
+    changed = true;
+  }
+
+  if (!changed) return false;
+  orbitUiInstance.setOrbitState(repaired);
+  return true;
+}
+
+/**
  * Purpose: Decide whether restored Orbit control geometry is inconsistent with current parameter values.
  * How: Compares value implied by each point position against `paramValues` and flags restoration when mismatch ratio is high.
  */
@@ -2294,6 +2429,7 @@ function forceOrbitReprojection(baseState, values) {
   }
   orbitUiInstance.setOrbitState(repaired);
   orbitUiInstance.setParams(values || {});
+  enforceOrbitGeometryFromParams(values || {});
 }
 
 /**
@@ -3523,6 +3659,7 @@ function sendRunParamsSnapshot(force = false) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      runStateSha: currentSha,
       runParamsUi: LOCAL_RUN_UI_OWNER,
       runParams: cloneParamCells(paramCells)
     })
@@ -3672,6 +3809,11 @@ export function dispose() {
     clearTimeout(orbitParamSyncTimer);
     orbitParamSyncTimer = null;
   }
+  if (orbitLayoutRetryTimer) {
+    clearTimeout(orbitLayoutRetryTimer);
+    orbitLayoutRetryTimer = null;
+  }
+  runRenderSeq += 1;
   remoteSyncInFlight = false;
   controlsSplit = null;
   controlsClassicPane = null;

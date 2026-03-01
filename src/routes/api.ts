@@ -668,14 +668,17 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   /**
    * POST /state
    * Met à jour l'état courant (session + vue)
-   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runParams?: any, runParamsUi?: string|null, runTransport?: any, runTrigger?: any, runPolyphony?: number, runMidi?: any, runOrbitUi?: any, spectrum?: any, spectrumSummary?: any }
+   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runStateSha?: string, runParams?: any, runParamsUi?: string|null, runTransport?: any, runTrigger?: any, runPolyphony?: number, runMidi?: any, runOrbitUi?: any, spectrum?: any, spectrumSummary?: any }
    */
   router.post('/state', (req: Request, res: Response) => {
+    const currentState = stateStore.read();
+    const currentSha = typeof currentState.sha1 === 'string' ? currentState.sha1 : null;
     const {
       sha1,
       view,
       audioUnlocked,
       ui,
+      runStateSha,
       runParams,
       runParamsUi,
       runTransport,
@@ -726,34 +729,75 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     if (ui !== undefined) {
       partial.ui = ui;
     }
+    const targetShaForRunState =
+      partial.sha1 === undefined
+        ? currentSha
+        : (typeof partial.sha1 === 'string' ? partial.sha1 : null);
+    const runStateShaTag = typeof runStateSha === 'string' && runStateSha.trim() ? runStateSha.trim() : null;
+    const acceptRunScopedWrite = !runStateShaTag || runStateShaTag === targetShaForRunState;
+
     if (runParams !== undefined) {
-      const now = Date.now();
-      const writer = normalizeOwner(runParamsUi) ?? null;
-      const currentParams = getRunParamMap(stateStore.read());
-      const incomingParams = normalizeRunParamMap(runParams, now);
-      // Merge instead of blind overwrite so concurrent writers remain deterministic.
-      partial.runParams = mergeRunParamMaps(currentParams, incomingParams, writer);
+      if (acceptRunScopedWrite) {
+        const now = Date.now();
+        const writer = normalizeOwner(runParamsUi) ?? null;
+        const currentParams = getRunParamMap(currentState);
+        const incomingParams = normalizeRunParamMap(runParams, now);
+        // Merge instead of blind overwrite so concurrent writers remain deterministic.
+        partial.runParams = mergeRunParamMaps(currentParams, incomingParams, writer);
+      }
     }
     if (runTransport !== undefined) {
-      partial.runTransport = runTransport as AppState['runTransport'];
+      if (acceptRunScopedWrite) {
+        partial.runTransport = runTransport as AppState['runTransport'];
+      }
     }
     if (runTrigger !== undefined) {
-      partial.runTrigger = runTrigger as AppState['runTrigger'];
+      if (acceptRunScopedWrite) {
+        partial.runTrigger = runTrigger as AppState['runTrigger'];
+      }
     }
     if (typeof runPolyphony === 'number' && Number.isFinite(runPolyphony)) {
-      partial.runPolyphony = Math.max(0, Math.round(runPolyphony));
+      if (acceptRunScopedWrite) {
+        partial.runPolyphony = Math.max(0, Math.round(runPolyphony));
+      }
     }
     if (runMidi !== undefined) {
-      partial.runMidi = runMidi as AppState['runMidi'];
+      if (acceptRunScopedWrite) {
+        partial.runMidi = runMidi as AppState['runMidi'];
+      }
     }
     if (runOrbitUi !== undefined) {
-      partial.runOrbitUi = runOrbitUi as AppState['runOrbitUi'];
+      if (acceptRunScopedWrite) {
+        partial.runOrbitUi = runOrbitUi as AppState['runOrbitUi'];
+      }
     }
     if (spectrum !== undefined) {
-      partial.spectrum = spectrum as AppState['spectrum'];
+      if (acceptRunScopedWrite) {
+        partial.spectrum = spectrum as AppState['spectrum'];
+      }
     }
     if (spectrumSummary !== undefined) {
-      partial.spectrumSummary = spectrumSummary as AppState['spectrumSummary'];
+      if (acceptRunScopedWrite) {
+        partial.spectrumSummary = spectrumSummary as AppState['spectrumSummary'];
+      }
+    }
+
+    const nextSha =
+      partial.sha1 === undefined
+        ? currentSha
+        : (typeof partial.sha1 === 'string' ? partial.sha1 : null);
+    const sessionChanged = nextSha !== currentSha;
+    if (sessionChanged) {
+      // Run runtime state is session-scoped: when active session changes, stale
+      // run payloads must not bleed into the new session unless explicitly provided.
+      if (runParams === undefined) partial.runParams = {};
+      if (runTransport === undefined) partial.runTransport = undefined;
+      if (runTrigger === undefined) partial.runTrigger = undefined;
+      if (runMidi === undefined) partial.runMidi = undefined;
+      if (runOrbitUi === undefined) partial.runOrbitUi = undefined;
+      if (spectrum === undefined) partial.spectrum = undefined;
+      if (spectrumSummary === undefined) partial.spectrumSummary = undefined;
+      if (partial.runPolyphony === undefined) partial.runPolyphony = 0;
     }
 
     const next = stateStore.update(partial);

@@ -883,6 +883,18 @@ Contraintes temporelles :
 - Le contenu spectral est poussé périodiquement par la vue run (summary prioritaire), puis agrégé côté MCP pendant `captureMs`.
 - Le résumé spectral peut inclure un feedback qualité audio (`audioQuality`) pour détecter clicks et saturation.
 
+Frontière de partage (session donnée) :
+- Partagé backend <-> frontend :
+  - état DSP canonique (`runParams` / `paramCells`)
+  - événements run atomiques (`runTrigger`, `runMidi`, `runTransport`) avec nonce
+  - contexte session/vue (`sha1`, `view`) selon les opérations MCP/UI
+- Local frontend (non partagé) :
+  - état de présentation Orbit UI (`center`, `zoom`, `innerRadius`, `outerRadius`, positions XY, disabled local)
+  - état de présentation Regular UI (zoom, scroll/pan, disposition locale)
+- Règle de conception :
+  - une donnée est partagée seulement si elle modifie le comportement audio/DSP ou une commande métier commune
+  - une donnée purement visuelle, dépendante du layout écran/utilisateur, reste locale
+
 ### Note : pas de suppression via MCP
 
 ```text
