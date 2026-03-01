@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import { CONFIG } from './config';
 
 const DOCKER_IMAGE = 'ghcr.io/orlarey/faustdocker:main';
 const TIMEOUT_MS = 30000; // 30 secondes
@@ -8,8 +9,8 @@ const VERSION_TIMEOUT_MS = 10000; // 10 secondes
 
 let cachedFaustVersion: string | null = null;
 let cachedFaustHelp: string | null = null;
-const CONTAINER_SESSIONS_DIR = process.env.SESSIONS_DIR || '/app/sessions';
-const HOST_SESSIONS_DIR = process.env.HOST_SESSIONS_DIR || '';
+const CONTAINER_SESSIONS_DIR = CONFIG.sessionsDir || '/app/sessions';
+const HOST_SESSIONS_DIR = CONFIG.hostSessionsDir || '';
 const WINDOWS_ABS_PATH_RE = /^([a-zA-Z]):[\\/](.*)$/;
 
 export interface DockerResult {
@@ -295,13 +296,13 @@ export async function analyzeFaust(
   // Déplacer les artefacts de la passe principale.
   if (result.success) {
     moveSvgFiles(sessionPath, filename);
-    moveSignalsDotFile(sessionPath, filename);
+    moveDotFile(sessionPath, filename, '-sig.dot', 'signals.dot');
 
     // Passe tasks (non bloquante): nécessite -vec avec -tg.
     // Si cette passe échoue, on conserve la session utilisable sans tasks.dot.
     const tasksResult = await runFaustDocker(sessionPath, filename, ['-vec', '-tg']);
     if (tasksResult.success) {
-      moveTasksDotFile(sessionPath, filename);
+      moveDotFile(sessionPath, filename, '.dot', 'tasks.dot');
     }
   }
 
@@ -369,35 +370,20 @@ function moveSvgFiles(sessionPath: string, filename: string): void {
 }
 
 /**
- * Déplace le graphe de signaux DOT vers un emplacement stable
+ * Déplace un graphe DOT généré vers un emplacement de session stable.
  */
-function moveSignalsDotFile(sessionPath: string, filename: string): void {
+function moveDotFile(
+  sessionPath: string,
+  filename: string,
+  generatedSuffix: string,
+  destinationName: string
+): void {
   const sourcecodePath = path.join(sessionPath, 'sourcecode');
   const candidates = [
-    path.join(sourcecodePath, `${filename}-sig.dot`),
-    path.join(sessionPath, `${filename}-sig.dot`)
+    path.join(sourcecodePath, `${filename}${generatedSuffix}`),
+    path.join(sessionPath, `${filename}${generatedSuffix}`)
   ];
-  const dotDest = path.join(sessionPath, 'signals.dot');
-
-  try {
-    const dotSource = candidates.find((p) => fs.existsSync(p));
-    if (!dotSource) return;
-    fs.copyFileSync(dotSource, dotDest);
-  } catch {
-    // Ignorer les erreurs de déplacement
-  }
-}
-
-/**
- * Déplace le graphe de tâches DOT vers un emplacement stable
- */
-function moveTasksDotFile(sessionPath: string, filename: string): void {
-  const sourcecodePath = path.join(sessionPath, 'sourcecode');
-  const candidates = [
-    path.join(sourcecodePath, `${filename}.dot`),
-    path.join(sessionPath, `${filename}.dot`)
-  ];
-  const dotDest = path.join(sessionPath, 'tasks.dot');
+  const dotDest = path.join(sessionPath, destinationName);
 
   try {
     const dotSource = candidates.find((p) => fs.existsSync(p));

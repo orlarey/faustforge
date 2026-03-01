@@ -64,6 +64,18 @@ export class SessionManager {
   }
 
   /**
+   * Read and parse one session metadata file.
+   * Returns null when file is missing or malformed.
+   */
+  private readMetadata(metadataPath: string): SessionMeta | null {
+    try {
+      return JSON.parse(fs.readFileSync(metadataPath, 'utf8')) as SessionMeta;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Recompute `live_draft` for all existing live sessions.
    * This keeps old metadata consistent with the current "empty file => draft" rule.
    */
@@ -81,7 +93,8 @@ export class SessionManager {
       if (!fs.existsSync(metadataPath)) continue;
 
       try {
-        const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        const metadata = this.readMetadata(metadataPath);
+        if (!metadata) continue;
         if (metadata.kind !== 'live') continue;
 
         let sourceContent = '';
@@ -126,7 +139,8 @@ export class SessionManager {
         if (entry.isDirectory() && this.isValidSessionId(entry.name)) {
           const metadataPath = path.join(this.sessionsDir, entry.name, 'metadata.json');
           try {
-            const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+            const metadata = this.readMetadata(metadataPath);
+            if (!metadata) continue;
             const kind: 'static' | 'live' = metadata.kind === 'live' ? 'live' : 'static';
             const id = typeof metadata.sha1 === 'string' && metadata.sha1 ? metadata.sha1 : entry.name;
             if (!this.isValidSessionId(id)) {
@@ -319,7 +333,10 @@ export class SessionManager {
     let existingUsageScore: number | null = null;
     if (fs.existsSync(metadataPath)) {
       try {
-        const prev: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        const prev = this.readMetadata(metadataPath);
+        if (!prev) {
+          throw new Error('Invalid metadata');
+        }
         if (typeof prev.compilation_time === 'number' && Number.isFinite(prev.compilation_time)) {
           existingCompilationTime = prev.compilation_time;
         }
@@ -387,7 +404,10 @@ export class SessionManager {
 
     if (existed) {
       try {
-        const prev: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        const prev = this.readMetadata(metadataPath);
+        if (!prev) {
+          throw new Error('Invalid metadata');
+        }
         if (
           prev.kind === 'live' &&
           typeof prev.source_mtime_ms === 'number' &&
@@ -425,7 +445,8 @@ export class SessionManager {
     for (const id of this.creationOrder) {
       const metadataPath = path.join(this.sessionsDir, id, 'metadata.json');
       try {
-        const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        const metadata = this.readMetadata(metadataPath);
+        if (!metadata) continue;
         if (metadata.kind !== 'live') continue;
         out.push({
           sha1: id,
@@ -462,7 +483,10 @@ export class SessionManager {
     }
     const metadataPath = path.join(this.sessionsDir, liveId, 'metadata.json');
     try {
-      const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      const metadata = this.readMetadata(metadataPath);
+      if (!metadata) {
+        return { changed: false, session: null };
+      }
       if (metadata.kind !== 'live' || !metadata.source_path) {
         return { changed: false, session: null };
       }
@@ -506,7 +530,10 @@ export class SessionManager {
     // Lire le metadata pour récupérer le filename
     const metadataPath = path.join(this.sessionsDir, sha1, 'metadata.json');
     try {
-      const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      const metadata = this.readMetadata(metadataPath);
+      if (!metadata) {
+        return null;
+      }
       return {
         sha1,
         filename: metadata.filename,
@@ -576,7 +603,8 @@ export class SessionManager {
     for (const sha1 of this.creationOrder) {
       const metadataPath = path.join(this.sessionsDir, sha1, 'metadata.json');
       try {
-        const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        const metadata = this.readMetadata(metadataPath);
+        if (!metadata) continue;
         summaries.push({
           sha1: metadata.sha1,
           kind: metadata.kind === 'live' ? 'live' : 'static',
@@ -649,7 +677,8 @@ export class SessionManager {
     if (!this.exists(sha1)) return false;
     const metadataPath = path.join(this.sessionsDir, sha1, 'metadata.json');
     try {
-      const metadata: SessionMeta = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      const metadata = this.readMetadata(metadataPath);
+      if (!metadata) return false;
       metadata.last_used_time = when;
       const currentScore =
         typeof metadata.usage_score === 'number' && Number.isFinite(metadata.usage_score)

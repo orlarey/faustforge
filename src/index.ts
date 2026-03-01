@@ -1,10 +1,10 @@
-import * as path from 'path';
 import { createServer } from './server';
+import { CONFIG } from './config';
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-const SESSIONS_DIR = process.env.SESSIONS_DIR || path.join(__dirname, '..', 'sessions');
-const PUBLIC_DIR = process.env.PUBLIC_DIR || path.join(__dirname, '..', 'public');
-const maxSessionsRaw = process.env.MAX_SESSIONS;
+const PORT = CONFIG.port;
+const SESSIONS_DIR = CONFIG.sessionsDir;
+const PUBLIC_DIR = CONFIG.publicDir;
+const maxSessionsRaw = CONFIG.maxSessionsRaw;
 const maxSessions = Number.isFinite(Number(maxSessionsRaw)) ? Math.max(0, Math.round(Number(maxSessionsRaw))) : 0;
 
 const app = createServer({

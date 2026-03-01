@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { SessionManager } from '../sessions';
 import { StateStore, View, AppState, RunParamCell } from '../state';
+import { CONFIG } from '../config';
 import {
   analyzeFaust,
   compileFaustCpp,
@@ -16,9 +17,9 @@ import {
 
 export function createApiRouter(sessionManager: SessionManager, stateStore: StateStore): Router {
   const router = Router();
-  const sessionsBaseDir = process.env.SESSIONS_DIR || '/app/sessions';
-  const liveWorkspaceRoot = process.env.LIVE_WORKSPACE_ROOT || '/workspace';
-  const hostLiveWorkspaceRoot = process.env.HOST_LIVE_WORKSPACE_ROOT || '';
+  const sessionsBaseDir = CONFIG.sessionsDir || '/app/sessions';
+  const liveWorkspaceRoot = CONFIG.liveWorkspaceRoot || '/workspace';
+  const hostLiveWorkspaceRoot = CONFIG.hostLiveWorkspaceRoot || '';
   const appVersion = readAppVersion();
   // Canonical in-memory shape for run parameter synchronization.
   // Every parameter is represented as a timestamped cell.
@@ -158,6 +159,19 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     const ext = path.extname(filename) || '.dsp';
     const base = path.basename(filename, ext) || 'session';
     return { base, ext };
+  }
+
+  function getSessionBaseFilename(filename: string): string {
+    return splitBaseAndExt(filename).base || 'session';
+  }
+
+  function requireSession(sha: string, res: Response) {
+    const session = sessionManager.getSession(sha);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return null;
+    }
+    return session;
   }
 
   function chooseEditableFilename(targetDir: string, preferredFilename: string, sourceContent: Buffer): string {
@@ -552,11 +566,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return;
     }
 
-    const session = sessionManager.getSession(sha);
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
+    const session = requireSession(sha, res);
+    if (!session) return;
 
     const source = sessionManager.getFile(sha, 'user_code.dsp');
     if (!source) {
@@ -826,11 +837,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
    */
   router.post('/:sha/refresh', async (req: Request, res: Response) => {
     const { sha } = req.params;
-    const session = sessionManager.getSession(sha);
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
+    const session = requireSession(sha, res);
+    if (!session) return;
 
     try {
       clearSessionArtifacts(session.path);
@@ -1182,11 +1190,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
    */
   router.post('/:sha/compile/cpp', async (req: Request, res: Response) => {
     const { sha } = req.params;
-    const session = sessionManager.getSession(sha);
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
+    const session = requireSession(sha, res);
+    if (!session) return;
     const rawFlags = req.body?.flags;
     if (rawFlags !== undefined && typeof rawFlags !== 'string') {
       res.status(400).json({ error: 'Invalid flags' });
@@ -1214,11 +1219,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   router.get('/:sha/compile/wasm', async (req: Request, res: Response) => {
     const { sha } = req.params;
 
-    const session = sessionManager.getSession(sha);
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
+    const session = requireSession(sha, res);
+    if (!session) return;
 
     // Vérifier qu'il n'y a pas d'erreurs de compilation
     const errors = sessionManager.getErrors(sha);
@@ -1249,11 +1251,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   router.get('/:sha/compile/run', async (req: Request, res: Response) => {
     const { sha } = req.params;
 
-    const session = sessionManager.getSession(sha);
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
+    const session = requireSession(sha, res);
+    if (!session) return;
 
     const errors = sessionManager.getErrors(sha);
     if (errors.trim()) {
@@ -1307,11 +1306,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
    */
   router.get('/:sha/download/dsp', (req: Request, res: Response) => {
     const { sha } = req.params;
-    const session = sessionManager.getSession(sha);
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
+    const session = requireSession(sha, res);
+    if (!session) return;
 
     const content = sessionManager.getFile(sha, 'user_code.dsp');
     if (!content) {
@@ -1331,11 +1327,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
    */
   router.get('/:sha/download/cpp', (req: Request, res: Response) => {
     const { sha } = req.params;
-    const session = sessionManager.getSession(sha);
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
+    const session = requireSession(sha, res);
+    if (!session) return;
 
     const content = sessionManager.getFile(sha, 'generated.cpp');
     if (!content) {
@@ -1343,7 +1336,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return;
     }
 
-    const base = session.filename.replace(/\.dsp$/i, '') || 'session';
+    const base = getSessionBaseFilename(session.filename);
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Content-Disposition', `attachment; filename="${base}.cpp"`);
     markUsed(session.sha1, 3);
@@ -1356,11 +1349,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
    */
   router.get('/:sha/download/svg', async (req: Request, res: Response) => {
     const { sha } = req.params;
-    const session = sessionManager.getSession(sha);
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
+    const session = requireSession(sha, res);
+    if (!session) return;
 
     const result = await tarGzDirectory(session.path, 'svg', 'svg.tar.gz');
     if (!result.success || !result.archivePath) {
@@ -1368,7 +1358,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return;
     }
 
-    const base = session.filename.replace(/\.dsp$/i, '') || 'session';
+    const base = getSessionBaseFilename(session.filename);
     markUsed(session.sha1, 3);
     res.download(result.archivePath, `${base}-svg.tar.gz`);
   });
@@ -1379,11 +1369,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
    */
   router.get('/:sha/download/signals', (req: Request, res: Response) => {
     const { sha } = req.params;
-    const session = sessionManager.getSession(sha);
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
+    const session = requireSession(sha, res);
+    if (!session) return;
 
     const content = sessionManager.getFile(sha, 'signals.dot');
     if (!content) {
@@ -1391,7 +1378,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return;
     }
 
-    const base = session.filename.replace(/\.dsp$/i, '') || 'session';
+    const base = getSessionBaseFilename(session.filename);
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Content-Disposition', `attachment; filename="${base}-sig.dot"`);
     markUsed(session.sha1, 3);
@@ -1404,11 +1391,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
    */
   router.get('/:sha/download/tasks', (req: Request, res: Response) => {
     const { sha } = req.params;
-    const session = sessionManager.getSession(sha);
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
+    const session = requireSession(sha, res);
+    if (!session) return;
 
     const content = sessionManager.getFile(sha, 'tasks.dot');
     if (!content) {
@@ -1416,7 +1400,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return;
     }
 
-    const base = session.filename.replace(/\.dsp$/i, '') || 'session';
+    const base = getSessionBaseFilename(session.filename);
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Content-Disposition', `attachment; filename="${base}.dsp.dot"`);
     markUsed(session.sha1, 3);
@@ -1429,11 +1413,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
    */
   router.get('/:sha/download/pwa', async (req: Request, res: Response) => {
     const { sha } = req.params;
-    const session = sessionManager.getSession(sha);
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
+    const session = requireSession(sha, res);
+    if (!session) return;
 
     const compile = await compileFaustWebapp(session.path, session.filename);
     if (!compile.success) {
@@ -1447,7 +1428,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       return;
     }
 
-    const base = session.filename.replace(/\.dsp$/i, '') || 'session';
+    const base = getSessionBaseFilename(session.filename);
     markUsed(session.sha1, 3);
     res.download(result.archivePath, `${base}-pwa.tar.gz`);
   });

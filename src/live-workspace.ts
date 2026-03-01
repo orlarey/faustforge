@@ -3,6 +3,7 @@ import * as path from 'path';
 import { analyzeFaust } from './docker';
 import { SessionManager } from './sessions';
 import { StateStore } from './state';
+import { CONFIG } from './config';
 
 export interface LiveWorkspaceConfig {
   enabled: boolean;
@@ -22,13 +23,13 @@ function parseIgnoreDirs(raw: string | undefined): string[] {
 }
 
 export function readLiveWorkspaceConfigFromEnv(): LiveWorkspaceConfig {
-  const enabled = process.env.LIVE_AUTO_DISCOVER === '1';
-  const rootDir = process.env.LIVE_WORKSPACE_ROOT || '/workspace';
-  const scanIntervalMsRaw = process.env.LIVE_SCAN_INTERVAL_MS;
+  const enabled = CONFIG.liveAutoDiscover;
+  const rootDir = CONFIG.liveWorkspaceRoot || '/workspace';
+  const scanIntervalMsRaw = CONFIG.liveScanIntervalMsRaw;
   const scanIntervalMs = Number.isFinite(Number(scanIntervalMsRaw))
     ? Math.max(500, Math.round(Number(scanIntervalMsRaw)))
     : 1500;
-  const ignoreDirs = parseIgnoreDirs(process.env.LIVE_IGNORE_DIRS);
+  const ignoreDirs = parseIgnoreDirs(CONFIG.liveIgnoreDirsRaw);
   return {
     enabled,
     rootDir,
