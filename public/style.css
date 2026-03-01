@@ -533,6 +533,18 @@ main {
   position: relative;
 }
 
+#view-container.view-staging-host {
+  position: relative;
+}
+
+#view-container .view-staging-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
 #view-container .view-crossfade-layer {
   position: absolute;
   inset: 0;
@@ -2338,6 +2350,26 @@ footer > * {
   overflow-y: hidden;
 }
 
+.run-controls-content-pending {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.run-view-pending {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.run-view-host-swapping {
+  position: relative;
+}
+
+.run-view-host-swapping > .run-view-pending {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
 .run-controls-split {
   display: grid;
   grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
@@ -2346,6 +2378,11 @@ footer > * {
   min-width: calc(640px + var(--run-panel-gap));
   height: 100%;
   min-height: 280px;
+}
+
+.run-controls-split-pending {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .run-controls-pane {

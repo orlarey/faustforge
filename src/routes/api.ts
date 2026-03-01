@@ -668,7 +668,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   /**
    * POST /state
    * Met à jour l'état courant (session + vue)
-   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runStateSha?: string, runParams?: any, runParamsUi?: string|null, runTransport?: any, runTrigger?: any, runPolyphony?: number, runMidi?: any, runOrbitUi?: any, spectrum?: any, spectrumSummary?: any }
+   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runStateSha?: string, runParams?: any, runParamsUi?: string|null, runTransport?: any, runTrigger?: any, runPolyphony?: number, runMidi?: any, spectrum?: any, spectrumSummary?: any }
    */
   router.post('/state', (req: Request, res: Response) => {
     const currentState = stateStore.read();
@@ -685,7 +685,6 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       runTrigger,
       runPolyphony,
       runMidi,
-      runOrbitUi,
       spectrum,
       spectrumSummary
     } =
@@ -766,11 +765,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
         partial.runMidi = runMidi as AppState['runMidi'];
       }
     }
-    if (runOrbitUi !== undefined) {
-      if (acceptRunScopedWrite) {
-        partial.runOrbitUi = runOrbitUi as AppState['runOrbitUi'];
-      }
-    }
+    // `runOrbitUi` is intentionally not merged from frontend writes:
+    // Orbit geometry is local presentation state, not shared session state.
     if (spectrum !== undefined) {
       if (acceptRunScopedWrite) {
         partial.spectrum = spectrum as AppState['spectrum'];
@@ -794,7 +790,7 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       if (runTransport === undefined) partial.runTransport = undefined;
       if (runTrigger === undefined) partial.runTrigger = undefined;
       if (runMidi === undefined) partial.runMidi = undefined;
-      if (runOrbitUi === undefined) partial.runOrbitUi = undefined;
+      partial.runOrbitUi = undefined;
       if (spectrum === undefined) partial.spectrum = undefined;
       if (spectrumSummary === undefined) partial.spectrumSummary = undefined;
       if (partial.runPolyphony === undefined) partial.runPolyphony = 0;

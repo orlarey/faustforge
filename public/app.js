@@ -695,7 +695,21 @@ async function renderCurrentView(targetContainer = viewContainer) {
   const view = state.views.find(v => v.id === state.currentView);
   if (!view) return;
 
-  targetContainer.innerHTML = '<div class="loading">Loading...</div>';
+  // Keep current content visible until next view is fully mounted.
+  // Avoid injecting a transient "Loading..." placeholder that causes flicker.
+  const useAtomicStagingSwap =
+    targetContainer === viewContainer
+    && view.id !== 'run'
+    && targetContainer.childElementCount > 0;
+  let renderTarget = targetContainer;
+  let stagingLayer = null;
+  if (useAtomicStagingSwap) {
+    stagingLayer = document.createElement('div');
+    stagingLayer.className = 'view-staging-layer';
+    targetContainer.classList.add('view-staging-host');
+    targetContainer.appendChild(stagingLayer);
+    renderTarget = stagingLayer;
+  }
 
   try {
     if (view.id === 'run') {
@@ -720,7 +734,7 @@ async function renderCurrentView(targetContainer = viewContainer) {
         ? state.viewScrollBySha[renderSha][view.id]
         : null;
     const scrollState = perSession || state.viewScroll[view.id];
-    await view.render(targetContainer, {
+    await view.render(renderTarget, {
       sha: renderSha,
       runState,
       scrollState,
@@ -820,8 +834,18 @@ async function renderCurrentView(targetContainer = viewContainer) {
         }
       }
     });
+    if (useAtomicStagingSwap && stagingLayer && targetContainer === viewContainer) {
+      const nextContent = document.createElement('div');
+      extractChildren(stagingLayer, nextContent);
+      targetContainer.innerHTML = '';
+      extractChildren(nextContent, targetContainer);
+      targetContainer.classList.remove('view-staging-host');
+    }
     scheduleTooltipApply(targetContainer);
   } catch (err) {
+    if (useAtomicStagingSwap && targetContainer === viewContainer) {
+      targetContainer.classList.remove('view-staging-host');
+    }
     targetContainer.innerHTML = `<div class="error">Error: ${err.message}</div>`;
     scheduleTooltipApply(targetContainer);
   }
@@ -955,7 +979,8 @@ async function loadSessionByIndex(index) {
     // Ignore error-log loading failures.
   }
 
-  showInterface();
+  const preserveExisting = viewContainer.childElementCount > 0;
+  showInterface({ preserveExisting });
   await renderCurrentView();
 }
 /**
@@ -1279,9 +1304,12 @@ function hideError() {
  * Purpose: Handle the `showInterface` step in the application flow.
  * How: Executes the show interface logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
  */
-function showInterface() {
+function showInterface(options = {}) {
+  const preserveExisting = !!(options && options.preserveExisting === true);
   viewContainer.classList.remove('hidden');
-  viewContainer.innerHTML = '';
+  if (!preserveExisting) {
+    viewContainer.innerHTML = '';
+  }
 }
 /**
  * Purpose: Handle the `hideInterface` step in the application flow.

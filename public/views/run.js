@@ -74,7 +74,6 @@ let lastAppliedMidiNonce = 0;
 let isSwitchingPolyphony = false;
 let runViewEnteredAt = 0;
 let lastAppliedRemoteRunParamsFingerprint = '';
-let lastAppliedRemoteOrbitNonce = 0;
 let orbitCanvas = null;
 let orbitBody = null;
 let orbitCtx = null;
@@ -83,7 +82,6 @@ let orbitPointer = null;
 let orbitNeedsDraw = false;
 let orbitRafId = null;
 let orbitResizeObserver = null;
-let lastRunOrbitSentAt = 0;
 let pendingOrbitUi = null;
 let orbitBaseWidth = 0;
 let orbitBaseHeight = 0;
@@ -100,10 +98,12 @@ let orbitPaneResizeRaf = null;
 let orbitLayoutRetryTimer = null;
 let runRenderSeq = 0;
 let remoteSyncInFlight = false;
+const compiledRunCache = new Map();
 // Owner identifier used by this front instance while a local UI interaction is active.
 const LOCAL_RUN_UI_OWNER = 'ui:run';
 // Delay before releasing local owner after the last local write on a parameter.
 const LOCAL_OWNER_RELEASE_MS = 220;
+const MAX_COMPILED_RUN_CACHE = 16;
 const PARAM_SMOOTH_INTERVAL_MS = 16;
 const PARAM_SMOOTH_EPSILON = 1e-4;
 const ORBIT_PARAM_SYNC_INTERVAL_MS = 33;
@@ -125,6 +125,16 @@ function isStaleRunRenderError(err) {
 function throwIfStaleRender(isStale) {
   if (typeof isStale === 'function' && isStale()) {
     throw createStaleRunRenderError();
+  }
+}
+
+function pruneCompiledRunCache() {
+  if (compiledRunCache.size <= MAX_COMPILED_RUN_CACHE) return;
+  const entries = [...compiledRunCache.entries()]
+    .sort((a, b) => Number(a[1]?.usedAt || 0) - Number(b[1]?.usedAt || 0));
+  while (compiledRunCache.size > MAX_COMPILED_RUN_CACHE && entries.length > 0) {
+    const [key] = entries.shift();
+    compiledRunCache.delete(key);
   }
 }
 
@@ -150,96 +160,120 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   runViewEnteredAt = Date.now();
   lastSpectrumSummary = null;
   lastAudioQuality = null;
+  const previousViewNodes = Array.from(container.children);
+  const runRoot = document.createElement('div');
+  runRoot.className = 'run-view run-view-pending';
+  const useOverlaySwap = previousViewNodes.length > 0;
 
-  container.innerHTML = `
-    <div class="run-view">
-      <div class="run-header">
-        <span class="run-note run-header-title">RUN</span>
-        <div class="run-midi-inline hidden" id="run-midi-inline"></div>
-        <div class="run-header-controls">
-          <div class="run-header-pill">
-            <span>Audio</span>
-            <select id="run-audio-state" aria-label="Audio state">
-              <option value="off">Off</option>
-              <option value="on">On</option>
-            </select>
-          </div>
-          <label class="run-header-pill">
-            <span>Mode</span>
-            <select id="run-mode">
-              <option value="mono">Mono</option>
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="4">4</option>
-              <option value="8">8</option>
-              <option value="16">16</option>
-              <option value="32">32</option>
-              <option value="64">64</option>
-            </select>
-          </label>
-          <label class="run-header-pill">
-            <span>MIDI</span>
-            <select id="midi-input"></select>
-          </label>
+  runRoot.innerHTML = `
+    <div class="run-header">
+      <span class="run-note run-header-title">RUN</span>
+      <div class="run-midi-inline hidden" id="run-midi-inline"></div>
+      <div class="run-header-controls">
+        <div class="run-header-pill">
+          <span>Audio</span>
+          <select id="run-audio-state" aria-label="Audio state">
+            <option value="off">Off</option>
+            <option value="on">On</option>
+          </select>
         </div>
-      </div>
-      <div class="run-controls" id="run-controls">
-        <div class="info">Compiling...</div>
-      </div>
-      <div class="run-scope">
-        <div class="run-scope-header">
-          <span class="run-scope-title">Oscilloscope</span>
-          <div class="run-scope-controls">
-            <label class="run-scope-pill">View
-              <select id="scope-view">
-                <option value="time">Waveform</option>
-                <option value="freq">Spectrum</option>
-              </select>
-            </label>
-            <label class="run-scope-pill">Scale
-              <select id="scope-scale">
-                <option value="log">Log</option>
-                <option value="linear">Linear</option>
-              </select>
-            </label>
-            <label class="run-scope-pill">Trigger
-              <select id="scope-mode">
-                <option value="auto">Auto</option>
-                <option value="normal">Normal</option>
-              </select>
-            </label>
-            <label class="run-scope-pill">Slope
-              <select id="scope-slope">
-                <option value="rising">Rising</option>
-                <option value="falling">Falling</option>
-              </select>
-            </label>
-            <label class="run-scope-pill">Threshold
-              <input id="scope-threshold" class="scope-input" type="number" step="0.01" value="0.0">
-            </label>
-            <label class="run-scope-pill">Holdoff (ms)
-              <input id="scope-holdoff" class="scope-input" type="number" step="1" value="20">
-            </label>
-          </div>
-        </div>
-        <canvas id="scope-canvas" width="640" height="160"></canvas>
+        <label class="run-header-pill">
+          <span>Mode</span>
+          <select id="run-mode">
+            <option value="mono">Mono</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="4">4</option>
+            <option value="8">8</option>
+            <option value="16">16</option>
+            <option value="32">32</option>
+            <option value="64">64</option>
+          </select>
+        </label>
+        <label class="run-header-pill">
+          <span>MIDI</span>
+          <select id="midi-input"></select>
+        </label>
       </div>
     </div>
+    <div class="run-controls" id="run-controls"></div>
+    <div class="run-scope">
+      <div class="run-scope-header">
+        <span class="run-scope-title">Oscilloscope</span>
+        <div class="run-scope-controls">
+          <label class="run-scope-pill">View
+            <select id="scope-view">
+              <option value="time">Waveform</option>
+              <option value="freq">Spectrum</option>
+            </select>
+          </label>
+          <label class="run-scope-pill">Scale
+            <select id="scope-scale">
+              <option value="log">Log</option>
+              <option value="linear">Linear</option>
+            </select>
+          </label>
+          <label class="run-scope-pill">Trigger
+            <select id="scope-mode">
+              <option value="auto">Auto</option>
+              <option value="normal">Normal</option>
+            </select>
+          </label>
+          <label class="run-scope-pill">Slope
+            <select id="scope-slope">
+              <option value="rising">Rising</option>
+              <option value="falling">Falling</option>
+            </select>
+          </label>
+          <label class="run-scope-pill">Threshold
+            <input id="scope-threshold" class="scope-input" type="number" step="0.01" value="0.0">
+          </label>
+          <label class="run-scope-pill">Holdoff (ms)
+            <input id="scope-holdoff" class="scope-input" type="number" step="1" value="20">
+          </label>
+        </div>
+      </div>
+      <canvas id="scope-canvas" width="640" height="160"></canvas>
+    </div>
   `;
+  if (useOverlaySwap) {
+    container.classList.add('run-view-host-swapping');
+  }
+  container.appendChild(runRoot);
+  const finalizeRunMount = () => {
+    if (!runRoot.isConnected) return;
+    runRoot.classList.remove('run-view-pending');
+    for (const node of previousViewNodes) {
+      if (node && node.parentElement === container) {
+        node.remove();
+      }
+    }
+    if (useOverlaySwap) {
+      container.classList.remove('run-view-host-swapping');
+    }
+  };
+  const discardRunMount = () => {
+    if (runRoot && runRoot.parentElement === container) {
+      runRoot.remove();
+    }
+    if (useOverlaySwap) {
+      container.classList.remove('run-view-host-swapping');
+    }
+  };
 
-  const audioStateSelect = container.querySelector('#run-audio-state');
-  const modeSelect = container.querySelector('#run-mode');
-  const midiInputSelect = container.querySelector('#midi-input');
-  const midiInlineEl = container.querySelector('#run-midi-inline');
-  const controlsEl = container.querySelector('#run-controls');
-  const scopeCanvas = container.querySelector('#scope-canvas');
-  const scopeView = container.querySelector('#scope-view');
-  const scopeScale = container.querySelector('#scope-scale');
-  const scopeMode = container.querySelector('#scope-mode');
-  const scopeSlope = container.querySelector('#scope-slope');
-  const scopeThreshold = container.querySelector('#scope-threshold');
-  const scopeHoldoff = container.querySelector('#scope-holdoff');
-  const noteEl = container.querySelector('.run-note');
+  const audioStateSelect = runRoot.querySelector('#run-audio-state');
+  const modeSelect = runRoot.querySelector('#run-mode');
+  const midiInputSelect = runRoot.querySelector('#midi-input');
+  const midiInlineEl = runRoot.querySelector('#run-midi-inline');
+  const controlsEl = runRoot.querySelector('#run-controls');
+  const scopeCanvas = runRoot.querySelector('#scope-canvas');
+  const scopeView = runRoot.querySelector('#scope-view');
+  const scopeScale = runRoot.querySelector('#scope-scale');
+  const scopeMode = runRoot.querySelector('#scope-mode');
+  const scopeSlope = runRoot.querySelector('#scope-slope');
+  const scopeThreshold = runRoot.querySelector('#scope-threshold');
+  const scopeHoldoff = runRoot.querySelector('#scope-holdoff');
+  const noteEl = runRoot.querySelector('.run-note');
   let audioLocked = false;
   /**
    * Purpose: Provide the `setAudioToggleState` step in the Run view runtime flow.
@@ -464,11 +498,6 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     await applyPolyphonyChange(voices);
   });
 
-  const prepared = prepareControlsContainer(controlsEl);
-  controlsBg = prepared.bg;
-  controlsContent = prepared.content;
-  controlsContent.innerHTML = '<div class="info">Compiling...</div>';
-
   audioStateSelect.disabled = true;
   setAudioToggleState(audioRunning);
 
@@ -479,12 +508,20 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     throwIfStaleRender(isRenderStale);
     setAudioToggleState(audioRunning);
   } catch (err) {
-    if (isStaleRunRenderError(err)) return;
+    if (isStaleRunRenderError(err)) {
+      discardRunMount();
+      return;
+    }
     setAudioToggleState(false);
     const message = err && err.message ? err.message : String(err);
-    controlsContent.innerHTML = `<div class="error">Error: ${message}</div>`;
+    if (controlsContent) {
+      controlsContent.innerHTML = `<div class="error">Error: ${message}</div>`;
+    } else {
+      controlsEl.innerHTML = `<div class="error">Error: ${message}</div>`;
+    }
   } finally {
     audioStateSelect.disabled = false;
+    finalizeRunMount();
   }
 
   /**
@@ -537,10 +574,17 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       cleanupAudio();
       setAudioToggleState(false);
       const stack = err && err.stack ? err.stack : '';
-      controlsContent.innerHTML = `
-        <div class="error">Error: ${message}</div>
-        <pre class="run-stack">${stack}</pre>
-      `;
+      if (controlsContent) {
+        controlsContent.innerHTML = `
+          <div class="error">Error: ${message}</div>
+          <pre class="run-stack">${stack}</pre>
+        `;
+      } else {
+        controlsEl.innerHTML = `
+          <div class="error">Error: ${message}</div>
+          <pre class="run-stack">${stack}</pre>
+        `;
+      }
     } finally {
       audioStateSelect.disabled = false;
     }
@@ -688,16 +732,6 @@ async function syncRemoteRunState() {
         }
       }
 
-      if (remote.runOrbitUi && typeof remote.runOrbitUi === 'object') {
-        const nonce =
-          typeof remote.runOrbitUi.nonce === 'number'
-            ? remote.runOrbitUi.nonce
-            : 0;
-        if (nonce > lastAppliedRemoteOrbitNonce) {
-          lastAppliedRemoteOrbitNonce = nonce;
-          applyRemoteOrbitUi(remote.runOrbitUi);
-        }
-      }
     } catch {
       // ignore sync errors
     } finally {
@@ -758,34 +792,52 @@ async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
   }
   const code = await codeResponse.text();
   throwIfStaleRender(isStale);
+  const modeKey = voices > 0 ? `poly:${voices}` : 'mono';
+  const cacheKey = `${sha}::${modeKey}`;
+  const cached = compiledRunCache.get(cacheKey);
 
-  const {
-    FaustCompiler,
-    LibFaust,
-    FaustMonoDspGenerator,
-    FaustPolyDspGenerator,
-    instantiateFaustModuleFromFile
-  } = await import('../vendor/faustwasm/index.js');
-  throwIfStaleRender(isStale);
+  if (cached && cached.code === code && cached.generator) {
+    cached.usedAt = Date.now();
+    compiledGenerator = cached.generator;
+    compiledGeneratorMode = modeKey;
+    compiledUI = cached.ui;
+  } else {
+    const {
+      FaustCompiler,
+      LibFaust,
+      FaustMonoDspGenerator,
+      FaustPolyDspGenerator,
+      instantiateFaustModuleFromFile
+    } = await import('../vendor/faustwasm/index.js');
+    throwIfStaleRender(isStale);
 
-  const base = `${window.location.origin}/libfaust-wasm/libfaust-wasm.js`;
-  const module = await instantiateFaustModuleFromFile(
-    base,
-    base.replace(/\.js$/, '.data'),
-    base.replace(/\.js$/, '.wasm')
-  );
-  throwIfStaleRender(isStale);
-  const compiler = new FaustCompiler(new LibFaust(module));
-  const generator = voices > 0 ? new FaustPolyDspGenerator() : new FaustMonoDspGenerator();
-  const compiled = await generator.compile(compiler, 'dsp', code, '-ftz 2');
-  throwIfStaleRender(isStale);
-  if (!compiled) {
-    throw new Error('Compilation failed');
+    const base = `${window.location.origin}/libfaust-wasm/libfaust-wasm.js`;
+    const module = await instantiateFaustModuleFromFile(
+      base,
+      base.replace(/\.js$/, '.data'),
+      base.replace(/\.js$/, '.wasm')
+    );
+    throwIfStaleRender(isStale);
+    const compiler = new FaustCompiler(new LibFaust(module));
+    const generator = voices > 0 ? new FaustPolyDspGenerator() : new FaustMonoDspGenerator();
+    const compiled = await generator.compile(compiler, 'dsp', code, '-ftz 2');
+    throwIfStaleRender(isStale);
+    if (!compiled) {
+      throw new Error('Compilation failed');
+    }
+
+    compiledGenerator = generator;
+    compiledGeneratorMode = modeKey;
+    compiledUI = generator.getUI();
+    compiledRunCache.set(cacheKey, {
+      code,
+      generator,
+      ui: compiledUI,
+      usedAt: Date.now()
+    });
+    pruneCompiledRunCache();
   }
 
-  compiledGenerator = generator;
-  compiledGeneratorMode = voices > 0 ? `poly:${voices}` : 'mono';
-  compiledUI = generator.getUI();
   seedParamValuesFromUiDefaults(compiledUI);
   uiParamPaths = collectParamPaths(compiledUI);
   uiButtonOrder = collectButtonPaths(compiledUI);
@@ -816,6 +868,15 @@ async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
   controlsClassicPane = prepared.classicPane;
   controlsOrbitPane = prepared.orbitPane;
   renderControls(controlsContent, compiledUI);
+  requestAnimationFrame(() => {
+    if (controlsContent) {
+      controlsContent.classList.remove('run-controls-content-pending');
+    }
+    if (controlsSplit) {
+      controlsSplit.classList.remove('run-controls-split-pending');
+    }
+    finalizeControlsContainerSwap(container, controlsBg, controlsContent);
+  });
   updateUiRoot(controlsContent);
 }
 
@@ -1302,7 +1363,6 @@ function renderOrbitUi(container, ui) {
       },
       onOrbitStateChange: (state) => {
         orbitZoom = String(Math.round(state.zoom));
-        sendRunOrbitSnapshot();
         if (emitRunStateFn) emitRunStateFn();
       }
     }
@@ -1335,7 +1395,6 @@ function renderOrbitUi(container, ui) {
   if (baseOrbitState && shouldForceOrbitReprojection(baseOrbitState, orbitUiInstance.getOrbitState(), paramValues)) {
     forceOrbitReprojection(baseOrbitState, paramValues);
   }
-  sendRunOrbitSnapshot(true);
 }
 
 /**
@@ -1668,7 +1727,6 @@ function installOrbitPointerHandlers() {
       event.preventDefault();
       toggleOrbitSliderDisabled(hit.path);
       scheduleOrbitDraw();
-      sendRunOrbitSnapshot(true);
       return;
     }
     event.preventDefault();
@@ -1697,7 +1755,6 @@ function installOrbitPointerHandlers() {
       orbitState.positions[orbitPointer.path] = nextPos;
       applyOrbitValueForPath(orbitPointer.path);
       scheduleOrbitDraw();
-      sendRunOrbitSnapshot();
       return;
     }
     if (orbitPointer.mode === 'outer') {
@@ -1706,7 +1763,6 @@ function installOrbitPointerHandlers() {
       ensureOrbitRadii();
       applyOrbitValuesForAll();
       scheduleOrbitDraw();
-      sendRunOrbitSnapshot();
       return;
     }
     if (orbitPointer.mode === 'center') {
@@ -1714,7 +1770,6 @@ function installOrbitPointerHandlers() {
       orbitState.center.y = clamp(p.y, 0, orbitState.height);
       applyOrbitValuesForAll();
       scheduleOrbitDraw();
-      sendRunOrbitSnapshot();
     }
   };
   orbitCanvas.onpointerup = (event) => {
@@ -1744,7 +1799,6 @@ function installOrbitPointerHandlers() {
     }
     orbitPointer = null;
     updateOrbitCursor(null);
-    sendRunOrbitSnapshot(true);
   };
   orbitCanvas.onpointercancel = () => {
     orbitPointer = null;
@@ -2127,59 +2181,17 @@ function buildRunOrbitSnapshot(includeNonce = true) {
 }
 
 /**
- * Purpose: Provide the `sendRunOrbitSnapshot` step in the Run view runtime flow.
- * How: Executes the send run orbit snapshot logic to update audio, MIDI, UI, or synchronization state as needed.
- */
-function sendRunOrbitSnapshot(force = false) {
-  const now = Date.now();
-  if (!force && now - lastRunOrbitSentAt < 120) return;
-  lastRunOrbitSentAt = now;
-  const snapshot = buildRunOrbitSnapshot(true);
-  if (!snapshot) return;
-  lastAppliedRemoteOrbitNonce = snapshot.nonce;
-  fetch('/api/state', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      runStateSha: currentSha,
-      runOrbitUi: snapshot
-    })
-  }).catch(() => {});
-}
-
-/**
- * Purpose: Provide the `applyRemoteOrbitUi` step in the Run view runtime flow.
- * How: Executes the apply remote orbit ui logic to update audio, MIDI, UI, or synchronization state as needed.
- */
-function applyRemoteOrbitUi(remoteOrbit) {
-  if (!remoteOrbit || typeof remoteOrbit !== 'object') return;
-  if (!orbitUiInstance) {
-    pendingOrbitUi = remoteOrbit;
-    return;
-  }
-  const base = orbitUiInstance.getOrbitState();
-  const merged = mergeRemoteOrbitState(base, remoteOrbit, { preserveCenter: true });
-  orbitUiInstance.setOrbitState(merged);
-  enforceOrbitGeometryFromParams(paramValues);
-}
-
-/**
  * Purpose: Provide the `mergeRemoteOrbitState` step in the Run view runtime flow.
  * How: Executes the merge remote orbit state logic to update audio, MIDI, UI, or synchronization state as needed.
  */
-function mergeRemoteOrbitState(baseState, remoteOrbit, options = {}) {
-  const preserveCenter = !!(options && options.preserveCenter === true);
+function mergeRemoteOrbitState(baseState, remoteOrbit) {
   const next = {
     zoom: Number.isFinite(remoteOrbit.zoom) ? Number(remoteOrbit.zoom) : baseState.zoom,
     center: {
-      x: preserveCenter
-        ? baseState.center.x
-        : Number.isFinite(remoteOrbit.center && remoteOrbit.center.x)
+      x: Number.isFinite(remoteOrbit.center && remoteOrbit.center.x)
         ? Number(remoteOrbit.center.x)
         : baseState.center.x,
-      y: preserveCenter
-        ? baseState.center.y
-        : Number.isFinite(remoteOrbit.center && remoteOrbit.center.y)
+      y: Number.isFinite(remoteOrbit.center && remoteOrbit.center.y)
         ? Number(remoteOrbit.center.y)
         : baseState.center.y
     },
@@ -3331,13 +3343,19 @@ function updateUiRoot(container) {
  * How: Executes the prepare controls container logic to update audio, MIDI, UI, or synchronization state as needed.
  */
 function prepareControlsContainer(container) {
-  container.innerHTML = '';
+  const hasExistingContent = !!container.querySelector('.run-controls-content');
   const bg = document.createElement('div');
   bg.className = 'run-controls-bg';
   const content = document.createElement('div');
   content.className = 'run-controls-content';
+  if (hasExistingContent) {
+    content.classList.add('run-controls-content-pending');
+  }
   const split = document.createElement('div');
   split.className = 'run-controls-split';
+  if (hasExistingContent) {
+    split.classList.add('run-controls-split-pending');
+  }
   const classicPane = document.createElement('div');
   classicPane.className = 'run-controls-pane run-controls-pane-classic';
   const orbitPane = document.createElement('div');
@@ -3347,7 +3365,16 @@ function prepareControlsContainer(container) {
   content.appendChild(split);
   container.appendChild(bg);
   container.appendChild(content);
-  return { bg, content, split, classicPane, orbitPane };
+  return { bg, content, split, classicPane, orbitPane, hasExistingContent };
+}
+
+function finalizeControlsContainerSwap(container, keepBg, keepContent) {
+  if (!container) return;
+  const staleNodes = container.querySelectorAll('.run-controls-bg, .run-controls-content');
+  for (const node of staleNodes) {
+    if (node === keepBg || node === keepContent) continue;
+    node.remove();
+  }
 }
 /**
  * Purpose: Provide the `ensureFaustUiCss` step in the Run view runtime flow.
@@ -3824,7 +3851,6 @@ export function dispose() {
   }
   lastAppliedTriggerNonce = 0;
   lastAppliedRemoteRunParamsFingerprint = '';
-  lastAppliedRemoteOrbitNonce = 0;
   pendingOrbitUi = null;
   lastSpectrumSummary = null;
   clearAllParamSmoothing();
