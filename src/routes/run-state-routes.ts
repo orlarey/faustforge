@@ -29,8 +29,8 @@ export function registerRunStateRoutes({
   mergeRunParamMaps
 }: RegisterRunStateRoutesOptions): void {
   /**
-   * GET /run/ui
-   * Récupère la structure UI de la session courante en vue run
+   * Purpose: Return the run-view UI schema for the active session.
+   * How: Validates active session presence, checks stored UI payload, and responds with `{ sha1, ui }`.
    */
   router.get('/run/ui', (_req: Request, res: Response) => {
     const state = stateStore.read();
@@ -46,8 +46,8 @@ export function registerRunStateRoutes({
   });
 
   /**
-   * GET /run/params
-   * Récupère les paramètres run courants
+   * Purpose: Return normalized run parameters for the active session.
+   * How: Reads run parameter cells from shared state and exposes both value-only and full-cell maps.
    */
   router.get('/run/params', (_req: Request, res: Response) => {
     const state = stateStore.read();
@@ -60,9 +60,8 @@ export function registerRunStateRoutes({
   });
 
   /**
-   * POST /run/param
-   * Met à jour un paramètre run par path
-   * Body: { path: string, value: number, uiId?: string|null, owner?: string|null, d?: number }
+   * Purpose: Update one run parameter cell by parameter path.
+   * How: Validates payload, merges one incoming cell with ownership/timestamp arbitration, and persists updated state.
    */
   router.post('/run/param', (req: Request, res: Response) => {
     const state = stateStore.read();
@@ -104,9 +103,8 @@ export function registerRunStateRoutes({
   });
 
   /**
-   * POST /run/transport
-   * Contrôle transport run (start/stop/toggle)
-   * Body: { action: "start" | "stop" | "toggle" }
+   * Purpose: Emit a run transport command for the active session.
+   * How: Validates transport action, writes a nonce-tagged command object in shared state, and returns it.
    */
   router.post('/run/transport', (req: Request, res: Response) => {
     const state = stateStore.read();
@@ -130,9 +128,8 @@ export function registerRunStateRoutes({
   });
 
   /**
-   * POST /run/trigger
-   * Déclenche un bouton run côté frontend (cycle press/release atomique)
-   * Body: { path: string, holdMs?: number }
+   * Purpose: Trigger a frontend run button press/release cycle.
+   * How: Validates target path, bounds hold duration, stores trigger command with nonce, and returns it.
    */
   router.post('/run/trigger', (req: Request, res: Response) => {
     const state = stateStore.read();
@@ -161,8 +158,8 @@ export function registerRunStateRoutes({
   });
 
   /**
-   * GET /run/polyphony
-   * Récupère le mode polyphonique courant (0 = mono)
+   * Purpose: Return the current run polyphony mode for the active session.
+   * How: Reads `runPolyphony` from shared state, normalizes it to a bounded integer, and responds with voices count.
    */
   router.get('/run/polyphony', (_req: Request, res: Response) => {
     const state = stateStore.read();
@@ -175,9 +172,8 @@ export function registerRunStateRoutes({
   });
 
   /**
-   * POST /run/polyphony
-   * Met à jour le mode polyphonique (0 = mono)
-   * Body: { voices: number }
+   * Purpose: Update the active session polyphony mode.
+   * How: Validates allowed voices values, stores normalized polyphony, and returns the persisted value.
    */
   router.post('/run/polyphony', (req: Request, res: Response) => {
     const state = stateStore.read();
@@ -202,9 +198,8 @@ export function registerRunStateRoutes({
   });
 
   /**
-   * POST /run/midi
-   * Publie une commande MIDI run atomique
-   * Body: { action: "on" | "off" | "pulse", note: number, velocity?: number, holdMs?: number }
+   * Purpose: Publish one atomic run MIDI command.
+   * How: Validates MIDI payload, clamps note/velocity/hold values, stores a nonce-tagged command, and returns it.
    */
   router.post('/run/midi', (req: Request, res: Response) => {
     const state = stateStore.read();

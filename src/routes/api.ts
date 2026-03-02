@@ -13,6 +13,10 @@ import {
 import { registerCompileDownloadRoutes } from './compile-download-routes';
 import { registerRunStateRoutes } from './run-state-routes';
 
+/**
+ * Purpose: Build the main API router for session, state, run, compile, and download workflows.
+ * How: Creates shared helper functions, mounts core endpoints, then delegates specialized route groups to sub-registrars.
+ */
 export function createApiRouter(sessionManager: SessionManager, stateStore: StateStore): Router {
   const router = Router();
   const sessionsBaseDir = CONFIG.sessionsDir || '/app/sessions';
@@ -23,11 +27,19 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   // Every parameter is represented as a timestamped cell.
   type RunParamMap = Record<string, RunParamCell>;
 
+  /**
+   * Purpose: Normalize numeric inputs used by run-state arbitration.
+   * How: Accepts only finite numbers and returns `null` for invalid values.
+   */
   function toFiniteNumber(input: unknown): number | null {
     if (typeof input !== 'number' || !Number.isFinite(input)) return null;
     return input;
   }
 
+  /**
+   * Purpose: Normalize lock-owner identifiers for run parameters.
+   * How: Converts `undefined`/`null` consistently and trims non-empty owner strings.
+   */
   function normalizeOwner(input: unknown): string | null | undefined {
     if (input === undefined) return undefined;
     if (input === null) return null;
@@ -36,6 +48,10 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     return trimmed ? trimmed : null;
   }
 
+  /**
+   * Purpose: Normalize one incoming run-parameter cell payload.
+   * How: Supports legacy numeric values, validates structured cell fields, and applies timestamp/owner defaults.
+   */
   function normalizeRunParamCell(input: unknown, fallbackTs: number): RunParamCell | null {
     // Backward compatibility: accept legacy numeric payloads and upgrade to cells.
     if (typeof input === 'number' && Number.isFinite(input)) {
@@ -54,6 +70,10 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     };
   }
 
+  /**
+   * Purpose: Normalize a run-parameter map payload into safe canonical cells.
+   * How: Iterates object entries, normalizes each cell, and drops malformed paths or values.
+   */
   function normalizeRunParamMap(input: unknown, fallbackTs: number): RunParamMap {
     // Defensive normalization: malformed entries are dropped, never partially trusted.
     const map: RunParamMap = {};
@@ -67,10 +87,18 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     return map;
   }
 
+  /**
+   * Purpose: Read canonical run-parameter cells from persisted app state.
+   * How: Re-normalizes stored `runParams` through the safe map normalizer.
+   */
   function getRunParamMap(state: AppState): RunParamMap {
     return normalizeRunParamMap(state.runParams || {}, 0);
   }
 
+  /**
+   * Purpose: Extract scalar parameter values from canonical run cells.
+   * How: Builds a flat `{ path: value }` object from each cell's `v` field.
+   */
   function toRunParamValues(params: RunParamMap): Record<string, number> {
     const values: Record<string, number> = {};
     for (const [path, cell] of Object.entries(params)) {
@@ -79,6 +107,10 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     return values;
   }
 
+  /**
+   * Purpose: Merge two run-parameter maps with ownership and freshness arbitration.
+   * How: Applies lock checks, timestamp ordering, and explicit owner transition rules per parameter path.
+   */
   function mergeRunParamMaps(current: RunParamMap, incoming: RunParamMap, writer: string | null): RunParamMap {
     // Per-param arbitration rules:
     // 1) lock ownership: writer must own lock (or lock must be free),
@@ -123,6 +155,10 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     return merged;
   }
 
+  /**
+   * Purpose: Remove generated artifacts before forced session regeneration.
+   * How: Deletes known artifact files/directories with recursive-force semantics and ignores cleanup failures.
+   */
   function clearSessionArtifacts(sessionPath: string): void {
     const targets = ['generated.cpp', 'signals.dot', 'tasks.dot', 'svg', 'wasm', 'webapp'];
     for (const relative of targets) {
@@ -130,20 +166,32 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
       try {
         fs.rmSync(fullPath, { recursive: true, force: true });
       } catch {
-        // Ignorer les erreurs de nettoyage
+        // Ignore cleanup failures.
       }
     }
   }
 
+  /**
+   * Purpose: Record session usage with an optional weighted increment.
+   * How: Validates session ID and delegates usage update to session manager with current timestamp.
+   */
   function markUsed(sha1: string | null | undefined, weight: number = 1): void {
     if (!sha1 || typeof sha1 !== 'string') return;
     sessionManager.markSessionUsed(sha1, Date.now(), weight);
   }
 
+  /**
+   * Purpose: Identify whether a session ID refers to a live session.
+   * How: Matches IDs against the `live-<sha1>` format.
+   */
   function isLiveSessionId(id: string): boolean {
     return /^live-[0-9a-f]{40}$/.test(id);
   }
 
+  /**
+   * Purpose: Produce a safe editable filename for workspace export.
+   * How: Keeps basename only, replaces unsafe characters, and enforces `.dsp` extension.
+   */
   function sanitizeEditableFilename(input: string): string {
     const base = path.basename(String(input || 'session.dsp'));
     const cleaned = base.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -153,16 +201,28 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     return `${cleaned}.dsp`;
   }
 
+  /**
+   * Purpose: Split a filename into sanitized base name and extension.
+   * How: Uses `path.extname/basename` with `.dsp` and `session` fallbacks.
+   */
   function splitBaseAndExt(filename: string): { base: string; ext: string } {
     const ext = path.extname(filename) || '.dsp';
     const base = path.basename(filename, ext) || 'session';
     return { base, ext };
   }
 
+  /**
+   * Purpose: Resolve the stable base name used for derived artifact filenames.
+   * How: Returns the base component from the filename split helper with a safety fallback.
+   */
   function getSessionBaseFilename(filename: string): string {
     return splitBaseAndExt(filename).base || 'session';
   }
 
+  /**
+   * Purpose: Resolve a session from request path params with standard 404 response handling.
+   * How: Loads session by ID and writes JSON 404 error when missing.
+   */
   function requireSession(sha: string, res: Response) {
     const session = sessionManager.getSession(sha);
     if (!session) {
@@ -172,6 +232,10 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     return session;
   }
 
+  /**
+   * Purpose: Choose a deterministic editable filename in workspace root without collisions.
+   * How: Reuses matching-content files when possible or appends incrementing numeric suffixes.
+   */
   function chooseEditableFilename(targetDir: string, preferredFilename: string, sourceContent: Buffer): string {
     const safePreferred = sanitizeEditableFilename(preferredFilename);
     const { base, ext } = splitBaseAndExt(safePreferred);
@@ -207,12 +271,20 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     }
   }
 
+  /**
+   * Purpose: Build editor deep-link URLs for host-side file opening.
+   * How: Currently supports VS Code via `vscode://file/...` URLs from normalized host paths.
+   */
   function buildEditorUrl(editor: string, hostPath: string): string | null {
     if (editor !== 'vscode') return null;
     const normalized = hostPath.replace(/\\/g, '/');
     return `vscode://file/${encodeURI(normalized)}`;
   }
 
+  /**
+   * Purpose: Archive a session subdirectory to `tar.gz`.
+   * How: Validates source directory existence and delegates archive creation to shared tar helpers.
+   */
   async function tarGzDirectory(
     sessionPath: string,
     dirName: string,
@@ -231,6 +303,10 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     return { success: true, errors: '', archivePath };
   }
 
+  /**
+   * Purpose: Archive a full directory tree into one `tar.gz` file.
+   * How: Invokes the generic archive creator with `.` target path.
+   */
   async function tarGzFromDirectory(
     sourceDir: string,
     outArchivePath: string
@@ -238,6 +314,10 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     return createTarGzArchive(sourceDir, outArchivePath, '.');
   }
 
+  /**
+   * Purpose: Create a `tar.gz` archive with robust fallback behavior.
+   * How: Tries native `tar` first and falls back to Python `tarfile` when `tar` is unavailable.
+   */
   async function createTarGzArchive(
     cwd: string,
     outArchivePath: string,
@@ -255,6 +335,10 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     return runPythonTar(cwd, outArchivePath, targetPath);
   }
 
+  /**
+   * Purpose: Run native `tar` archiving command.
+   * How: Spawns `tar -czf`, captures stderr, checks output file existence, and reports command-not-found explicitly.
+   */
   async function runTarCommand(
     cwd: string,
     outArchivePath: string,
@@ -287,6 +371,10 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     });
   }
 
+  /**
+   * Purpose: Create a `tar.gz` archive using Python fallback runtime.
+   * How: Executes an inline `python3` script relying on `tarfile` and validates archive output.
+   */
   async function runPythonTar(
     cwd: string,
     outArchivePath: string,
@@ -334,15 +422,13 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   }
 
   /**
-   * POST /submit
-   * Soumet du code Faust, crée une session et lance l'analyse
-   * Body: { code: string, filename: string, persistOnSuccessOnly?: boolean }
-   * Response: { sha1: string, errors: string, persisted: boolean }
+   * Purpose: Submit Faust source code and create/refresh its session artifacts.
+   * How: Validates payload, reuses existing sessions when available, or analyzes and persists a new session flow.
    */
   router.post('/submit', async (req: Request, res: Response) => {
     const { code, filename, persistOnSuccessOnly } = req.body;
 
-    // Validation
+    // Validate request payload.
     if (!code || typeof code !== 'string') {
       res.status(400).json({ error: 'Missing or invalid code' });
       return;
@@ -411,19 +497,19 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
         return;
       }
 
-      // Créer ou récupérer la session
+      // Create or fetch the session.
       const session = sessionManager.createSession(code, filename);
 
-      // Vérifier si l'analyse a déjà été faite (generated.cpp existe)
+      // Reuse existing analysis when generated artifacts are already present.
       const existingCpp = sessionManager.getFile(session.sha1, 'generated.cpp');
       if (existingCpp) {
-        // Session existante avec analyse déjà faite
+        // Existing session with completed analysis.
         const errors = sessionManager.getErrors(session.sha1);
         res.json({ sha1: session.sha1, errors, persisted: true });
         return;
       }
 
-      // Lancer l'analyse Faust
+      // Run Faust analysis for the newly persisted session.
       const result = await analyzeFaust(session.path, filename);
 
       res.json({
@@ -438,10 +524,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /sessions
-   * Liste les sessions par ordre demandé
-   * Query: ?limit=number&order=chronological|usage
-   * Response: { sessions: Array<{ sha1, kind, filename, compilation_time, last_used_time, usage_score }> }
+   * Purpose: List sessions with selectable ordering strategy.
+   * How: Reads query parameters, dispatches chronological or usage ordering, and returns normalized summaries.
    */
   router.get('/sessions', (req: Request, res: Response) => {
     const limitParam = req.query.limit;
@@ -455,9 +539,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * POST /:sha/use
-   * Marque une session comme utilisée (usage réel côté UI).
-   * Body: { reason?: string, weight?: number }
+   * Purpose: Explicitly mark one session as used from UI workflows.
+   * How: Validates session existence, bounds optional weight, and applies usage update.
    */
   router.post('/:sha/use', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -476,9 +559,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * POST /live/open
-   * Ouvre (ou met à jour) une session live à partir d'un fichier .dsp local.
-   * Body: { filePath: string }
+   * Purpose: Open or update a live session from a local DSP file.
+   * How: Resolves live session from file path, skips analysis for blank drafts, otherwise analyzes and returns latest errors.
    */
   router.post('/live/open', async (req: Request, res: Response) => {
     const { filePath } = req.body || {};
@@ -503,8 +585,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * POST /:sha/live/refresh
-   * Rafraîchit une session live depuis son fichier source.
+   * Purpose: Refresh one live session from its backing source file.
+   * How: Checks whether file content changed, re-analyzes only when needed, and returns updated change metadata.
    */
   router.post('/:sha/live/refresh', async (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -539,9 +621,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * POST /:sha/edit
-   * Convertit une session statique en session live éditable via fichier workspace.
-   * Body: { editor?: "vscode", openEditor?: boolean }
+   * Purpose: Convert a static session into an editable live workspace session.
+   * How: Copies source into workspace root with collision-safe naming, creates live session, analyzes, and returns editor metadata.
    */
   router.post('/:sha/edit', async (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -630,9 +711,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /version
-   * Récupère la version du compilateur Faust (via Docker)
-   * Response: { version: string }
+   * Purpose: Return Faust compiler version string.
+   * How: Fetches cached docker-based version and falls back to a generic message on errors.
    */
   router.get('/version', async (_req: Request, res: Response) => {
     try {
@@ -644,8 +724,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /faust/help
-   * Récupère l'aide du compilateur Faust (options disponibles).
+   * Purpose: Return Faust compiler help text.
+   * How: Fetches cached docker-based help output and falls back to an unavailable message on errors.
    */
   router.get('/faust/help', async (_req: Request, res: Response) => {
     try {
@@ -657,17 +737,16 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /app-version
-   * Récupère la version de faustforge (package.json)
-   * Response: { version: string }
+   * Purpose: Return faustforge application version.
+   * How: Responds with version cached at router construction time from `package.json`.
    */
   router.get('/app-version', (_req: Request, res: Response) => {
     res.json({ version: appVersion });
   });
 
   /**
-   * GET /state
-   * Récupère l'état courant (session + vue)
+   * Purpose: Return current shared application state.
+   * How: Reads state store and returns the full serialized payload.
    */
   router.get('/state', (_req: Request, res: Response) => {
     const state = stateStore.read();
@@ -675,9 +754,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * POST /state
-   * Met à jour l'état courant (session + vue)
-   * Body: { sha1?: string|null, view?: View, audioUnlocked?: boolean, ui?: any, runStateSha?: string, runParams?: any, runParamsUi?: string|null, runTransport?: any, runTrigger?: any, runPolyphony?: number, runMidi?: any, spectrum?: any, spectrumSummary?: any }
+   * Purpose: Merge client-provided partial state updates into shared application state.
+   * How: Validates session/view/run payloads, applies scoped run-state arbitration, and persists deterministic merged state.
    */
   router.post('/state', (req: Request, res: Response) => {
     const currentState = stateStore.read();
@@ -824,8 +902,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * POST /:sha/refresh
-   * Régénère les artefacts de session à partir du code source existant
+   * Purpose: Regenerate all analysis artifacts for one existing session.
+   * How: Clears generated files, reruns Faust analysis, and returns updated error output.
    */
   router.post('/:sha/refresh', async (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -847,8 +925,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /:sha/user_code.dsp
-   * Récupère le code source original
+   * Purpose: Return original DSP source file for one session.
+   * How: Loads `user_code.dsp` from session storage and responds as plain text.
    */
   router.get('/:sha/user_code.dsp', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -863,8 +941,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /:sha/generated.cpp
-   * Récupère le code C++ généré
+   * Purpose: Return generated C++ source for one session.
+   * How: Loads `generated.cpp` from session storage and responds as plain text.
    */
   router.get('/:sha/generated.cpp', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -879,8 +957,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /:sha/errors.log
-   * Récupère le log d'erreurs
+   * Purpose: Return compiler diagnostics for one session.
+   * How: Validates session existence then serves `errors.log` as plain text.
    */
   router.get('/:sha/errors.log', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -895,8 +973,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /:sha/metadata.json
-   * Récupère les métadonnées de session
+   * Purpose: Return session metadata JSON.
+   * How: Loads `metadata.json` from session storage and serves it as JSON content.
    */
   router.get('/:sha/metadata.json', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -911,8 +989,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /:sha/svg
-   * Liste les fichiers SVG disponibles
+   * Purpose: List available SVG artifact files for one session.
+   * How: Reads SVG directory entries and returns filenames as JSON.
    */
   router.get('/:sha/svg', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -927,8 +1005,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /:sha/svg/:name
-   * Récupère un fichier SVG spécifique
+   * Purpose: Return one SVG artifact by name.
+   * How: Loads `svg/<name>` from session storage and serves it with SVG MIME type.
    */
   router.get('/:sha/svg/:name', (req: Request, res: Response) => {
     const { sha, name } = req.params;
@@ -943,8 +1021,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /:sha/signals.dot
-   * Récupère le graphe de signaux DOT
+   * Purpose: Return generated signals DOT graph.
+   * How: Loads `signals.dot` from session storage and serves it as plain text.
    */
   router.get('/:sha/signals.dot', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -959,8 +1037,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * GET /:sha/tasks.dot
-   * Récupère le graphe de tâches DOT
+   * Purpose: Return generated tasks DOT graph.
+   * How: Loads `tasks.dot` from session storage and serves it as plain text.
    */
   router.get('/:sha/tasks.dot', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -986,8 +1064,8 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   });
 
   /**
-   * DELETE /:sha
-   * Supprime une session
+   * Purpose: Delete one session and its stored artifacts.
+   * How: Delegates to session manager deletion and returns success or not-found status.
    */
   router.delete('/:sha', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -1004,10 +1082,18 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
   return router;
 }
 
+/**
+ * Purpose: Provide fallback temporary directory path.
+ * How: Returns POSIX `/tmp`.
+ */
 function osTmpFallback(): string {
   return '/tmp';
 }
 
+/**
+ * Purpose: Read faustforge version from local package metadata.
+ * How: Parses `package.json`, validates non-empty version string, and returns default fallback on failures.
+ */
 function readAppVersion(): string {
   try {
     const pkgPath = path.resolve(process.cwd(), 'package.json');

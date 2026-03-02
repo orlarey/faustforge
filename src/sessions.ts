@@ -35,19 +35,20 @@ export interface SessionSummary {
 }
 
 /**
- * Gestionnaire de sessions avec cache LRU
+ * Purpose: Manage persistent Faust sessions and their metadata lifecycle.
+ * How: Creates/updates session directories, tracks ordering metadata, and exposes helpers for reads, writes, and live-session sync.
  */
 export class SessionManager {
   private sessionsDir: string;
   private maxSessions: number;
-  private lruOrder: string[] = []; // ordre d'accès, plus récent à la fin
-  private creationOrder: string[] = []; // ordre de création, plus ancien au début
+  private lruOrder: string[] = []; // Access order, most recent at the end.
+  private creationOrder: string[] = []; // Creation order, oldest at the beginning.
 
   constructor(sessionsDir: string, maxSessions: number = 0) {
     this.sessionsDir = sessionsDir;
-      this.maxSessions = Number.isFinite(maxSessions) && maxSessions > 0 ? maxSessions : 0;
+    this.maxSessions = Number.isFinite(maxSessions) && maxSessions > 0 ? maxSessions : 0;
 
-    // Créer le répertoire sessions s'il n'existe pas
+    // Ensure sessions directory exists.
     if (!fs.existsSync(sessionsDir)) {
       fs.mkdirSync(sessionsDir, { recursive: true });
     }
@@ -55,10 +56,14 @@ export class SessionManager {
     // Migration: align legacy live sessions with current draft semantics.
     this.migrateLiveDraftMetadata();
 
-    // Charger les sessions existantes
+    // Load previously persisted sessions.
     this.loadExistingSessions();
   }
 
+  /**
+   * Purpose: Detect whether a source text should be treated as a draft.
+   * How: Returns true when trimmed content is empty.
+   */
   private isBlankText(content: string): boolean {
     return content.trim().length === 0;
   }
@@ -129,7 +134,8 @@ export class SessionManager {
   }
 
   /**
-   * Charge les sessions existantes du filesystem
+   * Purpose: Reload current session IDs and ordering information from disk.
+   * How: Scans session folders, parses metadata summaries, then rebuilds creation and fallback LRU order arrays.
    */
   private loadExistingSessions(): void {
     try {
@@ -162,64 +168,78 @@ export class SessionManager {
                   : 0
             });
           } catch {
-            // Ignorer les sessions mal formées
+            // Ignore malformed sessions.
           }
         }
       }
       summaries.sort((a, b) => a.compilation_time - b.compilation_time);
       this.creationOrder = summaries.map(s => s.sha1);
-      // LRU: ordre de scan comme fallback
+      // LRU fallback follows scan/creation order.
       this.lruOrder = this.creationOrder.slice();
     } catch {
-      // Répertoire vide ou erreur, ignorer
+      // Ignore empty directory or read errors.
     }
   }
 
   /**
-   * Recharge la liste des sessions depuis le disque
+   * Purpose: Refresh in-memory session indexes from persisted storage.
+   * How: Re-runs full on-disk session discovery.
    */
   refreshSessions(): void {
     this.loadExistingSessions();
   }
 
   /**
-   * Vérifie si une chaîne est un SHA-1 valide
+   * Purpose: Validate canonical static session IDs.
+   * How: Checks whether the string matches a 40-character lowercase hex SHA-1 pattern.
    */
   private isValidSha1(str: string): boolean {
     return /^[0-9a-f]{40}$/.test(str);
   }
 
+  /**
+   * Purpose: Validate canonical live session IDs.
+   * How: Checks whether the string matches the `live-<sha1>` identifier format.
+   */
   private isValidLiveId(str: string): boolean {
     return /^live-[0-9a-f]{40}$/.test(str);
   }
 
+  /**
+   * Purpose: Validate any supported session identifier.
+   * How: Accepts both static SHA-1 IDs and `live-<sha1>` IDs.
+   */
   private isValidSessionId(str: string): boolean {
     return this.isValidSha1(str) || this.isValidLiveId(str);
   }
 
   /**
-   * Calcule le SHA-1 d'un code
+   * Purpose: Create deterministic content hashes for session identity and change detection.
+   * How: Computes SHA-1 over UTF-8 encoded source text.
    */
   computeSha1(code: string): string {
     return crypto.createHash('sha1').update(code, 'utf8').digest('hex');
   }
 
   /**
-   * Vérifie si une session existe
+   * Purpose: Check whether a session directory exists.
+   * How: Tests presence of `<sessionsDir>/<sha1>` on disk.
    */
   exists(sha1: string): boolean {
     return fs.existsSync(path.join(this.sessionsDir, sha1));
   }
 
   /**
-   * Récupère le chemin d'une session
+   * Purpose: Resolve absolute path for one session directory.
+   * How: Joins base sessions directory with session ID.
    */
   getSessionPath(sha1: string): string {
     return path.join(this.sessionsDir, sha1);
   }
 
   /**
-   * Met à jour l'ordre LRU (marque comme récemment accédé)
+   * Purpose: Mark one session as recently accessed in LRU order.
+   * How: Removes any existing entry and appends session ID to the end of the LRU list.
    */
   touch(sha1: string): void {
     const index = this.lruOrder.indexOf(sha1);
@@ -230,7 +250,8 @@ export class SessionManager {
   }
 
   /**
-   * Évicte les sessions les plus anciennes si nécessaire
+   * Purpose: Enforce optional maximum session count.
+   * How: Removes least-recently-used sessions until size is within configured limit.
    */
   private evict(): void {
     if (!this.maxSessions || this.maxSessions <= 0) {
@@ -243,7 +264,7 @@ export class SessionManager {
         try {
           fs.rmSync(sessionPath, { recursive: true, force: true });
         } catch {
-          // Ignorer les erreurs de suppression
+          // Ignore deletion failures.
         }
         const creationIndex = this.creationOrder.indexOf(oldest);
         if (creationIndex !== -1) {
@@ -254,32 +275,33 @@ export class SessionManager {
   }
 
   /**
-   * Crée une nouvelle session
+   * Purpose: Create a new static session from submitted DSP code.
+   * How: Builds session folder structure, writes source/metadata files, updates order indexes, and applies optional eviction.
    */
   createSession(code: string, filename: string): Session {
     const sha1 = this.computeSha1(code);
     const sessionPath = path.join(this.sessionsDir, sha1);
 
-    // Si la session existe déjà, juste touch et retourner
+    // If session already exists, only refresh access order.
     if (this.exists(sha1)) {
       this.touch(sha1);
       return { sha1, filename, path: sessionPath };
     }
 
-    // Créer la structure de la session
+    // Create session folder structure.
     const sourcecodePath = path.join(sessionPath, 'sourcecode');
     fs.mkdirSync(sourcecodePath, { recursive: true });
 
-    // Écrire le fichier source dans sourcecode/
+    // Write source file in sourcecode/.
     fs.writeFileSync(path.join(sourcecodePath, filename), code, 'utf8');
 
-    // Écrire la copie standardisée user_code.dsp
+    // Write standardized `user_code.dsp` copy.
     fs.writeFileSync(path.join(sessionPath, 'user_code.dsp'), code, 'utf8');
 
-    // Créer errors.log vide
+    // Initialize empty errors.log.
     fs.writeFileSync(path.join(sessionPath, 'errors.log'), '', 'utf8');
 
-    // Créer metadata.json
+    // Write metadata.json.
     const metadata: SessionMeta = {
       sha1,
       kind: 'static',
@@ -294,9 +316,9 @@ export class SessionManager {
       'utf8'
     );
 
-    // Ajouter au cache LRU
+    // Append to LRU cache.
     this.lruOrder.push(sha1);
-    // Ajouter à l'ordre de création
+    // Append to creation order.
     this.creationOrder.push(sha1);
     this.evict();
 
@@ -304,8 +326,8 @@ export class SessionManager {
   }
 
   /**
-   * Crée (ou met à jour) une session live à partir d'un fichier local.
-   * L'ID live est stable et dérivé du chemin canonique du fichier.
+   * Purpose: Create or refresh a live session from a local DSP file path.
+   * How: Derives stable live ID from canonical path, syncs source artifacts/metadata, and preserves historical usage fields.
    */
   createOrUpdateLiveSessionFromFile(filePath: string): Session {
     if (!filePath || typeof filePath !== 'string') {
@@ -347,7 +369,7 @@ export class SessionManager {
           existingUsageScore = prev.usage_score;
         }
       } catch {
-        // ignore malformed previous metadata
+        // Ignore malformed previous metadata.
       }
     }
 
@@ -382,8 +404,8 @@ export class SessionManager {
   }
 
   /**
-   * Assure l'existence d'une session live pour un fichier donné et indique
-   * si le contenu a changé depuis la dernière version connue.
+   * Purpose: Ensure a live session exists for a file and report whether it changed.
+   * How: Compares current source mtime with metadata and only rebuilds the live session when required.
    */
   ensureLiveSessionFromFile(filePath: string): { changed: boolean; isNew: boolean; session: Session } {
     if (!filePath || typeof filePath !== 'string') {
@@ -424,7 +446,7 @@ export class SessionManager {
           }
         }
       } catch {
-        // ignore malformed metadata
+        // Ignore malformed metadata.
       }
     }
 
@@ -437,7 +459,8 @@ export class SessionManager {
   }
 
   /**
-   * Liste les sessions live connues depuis le scan disque courant.
+   * Purpose: List known live sessions from current persisted state.
+   * How: Rebuilds session indexes then filters creation-ordered summaries to entries marked as `kind: live`.
    */
   listLiveSessions(limit?: number): SessionSummary[] {
     this.refreshSessions();
@@ -475,7 +498,8 @@ export class SessionManager {
   }
 
   /**
-   * Rafraîchit une session live depuis son fichier source si le contenu a changé.
+   * Purpose: Refresh one live session from its source file when content changed.
+   * How: Compares metadata mtime/content hash with source file state and either no-ops or rebuilds session artifacts.
    */
   refreshLiveSession(liveId: string): { changed: boolean; session: Session | null; contentSha1?: string } {
     if (!this.isValidLiveId(liveId) || !this.exists(liveId)) {
@@ -518,7 +542,8 @@ export class SessionManager {
   }
 
   /**
-   * Récupère une session existante
+   * Purpose: Fetch one session descriptor by ID.
+   * How: Validates existence, updates LRU access order, and reads filename from metadata.
    */
   getSession(sha1: string): Session | null {
     if (!this.exists(sha1)) {
@@ -527,7 +552,7 @@ export class SessionManager {
 
     this.touch(sha1);
 
-    // Lire le metadata pour récupérer le filename
+    // Read metadata to get filename.
     const metadataPath = path.join(this.sessionsDir, sha1, 'metadata.json');
     try {
       const metadata = this.readMetadata(metadataPath);
@@ -545,7 +570,8 @@ export class SessionManager {
   }
 
   /**
-   * Lit le contenu du fichier errors.log
+   * Purpose: Read persisted compiler diagnostics for one session.
+   * How: Loads `errors.log` text from the session directory and returns empty string on failures.
    */
   getErrors(sha1: string): string {
     const errorsPath = path.join(this.sessionsDir, sha1, 'errors.log');
@@ -557,7 +583,8 @@ export class SessionManager {
   }
 
   /**
-   * Écrit le contenu du fichier errors.log
+   * Purpose: Persist compiler diagnostics for one session.
+   * How: Overwrites session `errors.log` with provided text content.
    */
   setErrors(sha1: string, errors: string): void {
     const errorsPath = path.join(this.sessionsDir, sha1, 'errors.log');
@@ -565,10 +592,11 @@ export class SessionManager {
   }
 
   /**
-   * Récupère un fichier de la session
+   * Purpose: Read a file from a session directory with path-safety checks.
+   * How: Rejects traversal patterns, resolves session-relative path, and returns file buffer when present.
    */
   getFile(sha1: string, relativePath: string): Buffer | null {
-    // Sécurité : empêcher path traversal
+    // Security: prevent path traversal.
     if (relativePath.includes('..') || relativePath.startsWith('/')) {
       return null;
     }
@@ -582,7 +610,8 @@ export class SessionManager {
   }
 
   /**
-   * Liste les fichiers SVG dans une session
+   * Purpose: List SVG artifact filenames for a session.
+   * How: Reads `svg/` directory and keeps only `.svg` entries.
    */
   listSvgFiles(sha1: string): string[] | null {
     const svgDir = path.join(this.sessionsDir, sha1, 'svg');
@@ -626,7 +655,8 @@ export class SessionManager {
   }
 
   /**
-   * Liste des sessions par ordre de création (du plus ancien au plus récent)
+   * Purpose: List sessions in chronological creation order.
+   * How: Refreshes summaries and returns oldest-to-newest ordering with optional tail limit.
    */
   listSessionsByCreation(limit?: number): SessionSummary[] {
     this.refreshSessions();
@@ -638,7 +668,8 @@ export class SessionManager {
   }
 
   /**
-   * Liste des sessions triées par usage (MRU): plus récemment utilisée en premier.
+   * Purpose: List sessions sorted by most-recent-use order.
+   * How: Sorts by `last_used_time` descending with compilation time fallback tie-breakers.
    */
   listSessionsByLastUsed(limit?: number): SessionSummary[] {
     const sessions = this.listSessionsByCreation();
@@ -655,7 +686,8 @@ export class SessionManager {
   }
 
   /**
-   * Liste des sessions triées par score d'usage cumulé.
+   * Purpose: List sessions sorted by cumulative usage score.
+   * How: Sorts by score descending, then by last-used timestamp, then by compilation time.
    */
   listSessionsByUsage(limit?: number): SessionSummary[] {
     const sessions = this.listSessionsByCreation();
@@ -675,7 +707,8 @@ export class SessionManager {
   }
 
   /**
-   * Marque une session comme utilisée (usage réel, pas simple sélection).
+   * Purpose: Record one effective session usage event.
+   * How: Updates `last_used_time` and increments `usage_score` in metadata, then refreshes LRU ordering.
    */
   markSessionUsed(sha1: string, when: number = Date.now(), weight: number = 1): boolean {
     if (!this.exists(sha1)) return false;
@@ -699,7 +732,8 @@ export class SessionManager {
   }
 
   /**
-   * Supprime une session
+   * Purpose: Delete one session and remove it from in-memory order indexes.
+   * How: Deletes session directory recursively and prunes corresponding LRU/creation entries.
    */
   deleteSession(sha1: string): boolean {
     if (!this.exists(sha1)) {

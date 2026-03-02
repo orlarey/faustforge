@@ -12,34 +12,38 @@ export interface ServerConfig {
   maxSessions?: number;
 }
 
+/**
+ * Purpose: Build and configure the Express application used by faustforge.
+ * How: Instantiates shared services, mounts API routes, starts live workspace sync, and serves static frontend assets.
+ */
 export function createServer(config: ServerConfig): Application {
   const app = express();
 
-  // Middleware pour parser le JSON
+  // Parse JSON request payloads for API endpoints.
   app.use(express.json({ limit: '1mb' }));
 
-  // Créer le gestionnaire de sessions
+  // Create the session manager responsible for persistent session storage.
   const sessionManager = new SessionManager(
     config.sessionsDir,
     config.maxSessions ?? 0
   );
 
-  // Store d'état partagé (session/vue)
+  // Create shared state storage for current session/view data.
   const stateStore = new StateStore(config.sessionsDir);
 
-  // Monter les routes API
+  // Mount API routes.
   const apiRouter = createApiRouter(sessionManager, stateStore);
   app.use('/api', apiRouter);
 
-  // Optionnel: découverte auto des sessions live dans un workspace monté.
+  // Optionally auto-discover live sessions from a mounted workspace directory.
   const liveConfig = readLiveWorkspaceConfigFromEnv();
   const liveSync = new LiveWorkspaceSync(sessionManager, stateStore, liveConfig);
   liveSync.start();
 
-  // Servir les fichiers statiques (frontend)
+  // Serve frontend static assets.
   app.use(express.static(config.publicDir));
 
-  // Route par défaut : servir index.html pour le SPA
+  // Fallback root route for SPA bootstrap.
   app.get('/', (_req, res) => {
     res.sendFile(path.join(config.publicDir, 'index.html'));
   });

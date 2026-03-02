@@ -27,6 +27,10 @@ interface RegisterCompileDownloadRoutesOptions {
   ) => Promise<{ success: boolean; errors: string }>;
 }
 
+/**
+ * Purpose: Provide a fallback temp directory path for archive staging.
+ * How: Returns the POSIX `/tmp` directory used when sessions path is unavailable.
+ */
 function osTmpFallback(): string {
   return '/tmp';
 }
@@ -46,9 +50,8 @@ export function registerCompileDownloadRoutes({
   tarGzFromDirectory
 }: RegisterCompileDownloadRoutesOptions): void {
   /**
-   * POST /:sha/compile/cpp
-   * Recompile le C++ avec des options Faust personnalisées.
-   * Body: { flags?: string }
+   * Purpose: Recompile generated C++ for one session using custom Faust flags.
+   * How: Validates optional `flags`, runs backend C++ compilation, and returns the normalized compile result.
    */
   router.post('/:sha/compile/cpp', async (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -75,8 +78,8 @@ export function registerCompileDownloadRoutes({
   });
 
   /**
-   * GET /:sha/compile/wasm
-   * Déclenche la compilation WebAssembly
+   * Purpose: Compile one session to WebAssembly artifacts.
+   * How: Rejects sessions with analysis errors, executes WASM compilation, and returns success/errors payload.
    */
   router.get('/:sha/compile/wasm', async (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -105,8 +108,8 @@ export function registerCompileDownloadRoutes({
   });
 
   /**
-   * GET /:sha/compile/run
-   * Déclenche la compilation WebAssembly pour exécution web (wasm-i)
+   * Purpose: Compile one session to runtime-oriented WebAssembly artifacts (`wasm-i`).
+   * How: Rejects sessions with analysis errors, runs run-target WASM compilation, and returns compile status.
    */
   router.get('/:sha/compile/run', async (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -135,8 +138,8 @@ export function registerCompileDownloadRoutes({
   });
 
   /**
-   * GET /:sha/wasm/:file
-   * Récupère un fichier du répertoire wasm/
+   * Purpose: Serve one generated file from the session `wasm/` directory.
+   * How: Loads the requested file, applies response MIME by extension, and streams raw content.
    */
   router.get('/:sha/wasm/:file', (req: Request, res: Response) => {
     const { sha, file } = req.params;
@@ -159,8 +162,8 @@ export function registerCompileDownloadRoutes({
   });
 
   /**
-   * GET /:sha/download/dsp
-   * Télécharge le fichier DSP original
+   * Purpose: Download the original DSP source file for a session.
+   * How: Reads `user_code.dsp`, sets attachment headers with original filename, and sends the file bytes.
    */
   router.get('/:sha/download/dsp', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -180,8 +183,8 @@ export function registerCompileDownloadRoutes({
   });
 
   /**
-   * GET /:sha/download/cpp
-   * Télécharge le fichier C++ généré
+   * Purpose: Download the generated C++ output for a session.
+   * How: Reads `generated.cpp`, builds a stable download name from session filename, and sends text content.
    */
   router.get('/:sha/download/cpp', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -202,8 +205,8 @@ export function registerCompileDownloadRoutes({
   });
 
   /**
-   * GET /:sha/download/svg
-   * Télécharge les SVG sous forme de tar.gz
+   * Purpose: Download SVG outputs as a `tar.gz` archive.
+   * How: Archives the session `svg/` folder, then sends the resulting archive as a named attachment.
    */
   router.get('/:sha/download/svg', async (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -222,8 +225,8 @@ export function registerCompileDownloadRoutes({
   });
 
   /**
-   * GET /:sha/download/signals
-   * Télécharge le graphe de signaux DOT
+   * Purpose: Download the generated signals DOT graph.
+   * How: Reads `signals.dot`, sets attachment headers, and returns plain-text DOT content.
    */
   router.get('/:sha/download/signals', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -244,8 +247,8 @@ export function registerCompileDownloadRoutes({
   });
 
   /**
-   * GET /:sha/download/tasks
-   * Télécharge le graphe de tâches DOT
+   * Purpose: Download the generated tasks DOT graph.
+   * How: Reads `tasks.dot`, sets attachment headers, and returns plain-text DOT content.
    */
   router.get('/:sha/download/tasks', (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -266,8 +269,8 @@ export function registerCompileDownloadRoutes({
   });
 
   /**
-   * GET /:sha/download/pwa
-   * Télécharge l'application PWA (webapp) sous forme de tar.gz
+   * Purpose: Download a generated PWA webapp as a `tar.gz` archive.
+   * How: Ensures webapp generation exists, archives `webapp/`, and sends the archive as an attachment.
    */
   router.get('/:sha/download/pwa', async (req: Request, res: Response) => {
     const { sha } = req.params;
@@ -294,8 +297,8 @@ export function registerCompileDownloadRoutes({
   });
 
   /**
-   * GET /download/archive/dsp
-   * Télécharge une archive tar.gz de tous les fichiers DSP des sessions.
+   * Purpose: Download a single archive containing DSP files from all sessions.
+   * How: Stages each session DSP file under a temporary folder, creates a `tar.gz`, and streams it as a download.
    */
   router.get('/download/archive/dsp', async (_req: Request, res: Response) => {
     const tempBase = fs.existsSync(sessionsBaseDir) ? sessionsBaseDir : osTmpFallback();

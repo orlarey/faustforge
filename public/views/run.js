@@ -112,22 +112,38 @@ const paramSmooth = new Map();
 const localOwnerReleaseTimers = new Map();
 const STALE_RUN_RENDER_ERROR = 'STALE_RUN_RENDER';
 
+/**
+ * Purpose: Create a sentinel error used to abort stale asynchronous run renders.
+ * How: Builds an `Error` instance with a dedicated name/value used by stale-render guards.
+ */
 function createStaleRunRenderError() {
   const err = new Error(STALE_RUN_RENDER_ERROR);
   err.name = STALE_RUN_RENDER_ERROR;
   return err;
 }
 
+/**
+ * Purpose: Detect stale-render sentinel errors.
+ * How: Checks object shape and compares `name` against the stale-render error tag.
+ */
 function isStaleRunRenderError(err) {
   return !!(err && typeof err === 'object' && err.name === STALE_RUN_RENDER_ERROR);
 }
 
+/**
+ * Purpose: Abort current render flow when a stale-render condition is detected.
+ * How: Evaluates an optional stale predicate and throws the dedicated stale-render sentinel error when true.
+ */
 function throwIfStaleRender(isStale) {
   if (typeof isStale === 'function' && isStale()) {
     throw createStaleRunRenderError();
   }
 }
 
+/**
+ * Purpose: Keep compiled run-program cache size bounded.
+ * How: Sorts entries by least-recently-used timestamp and removes oldest entries until cap is respected.
+ */
 function pruneCompiledRunCache() {
   if (compiledRunCache.size <= MAX_COMPILED_RUN_CACHE) return;
   const entries = [...compiledRunCache.entries()]
@@ -139,16 +155,16 @@ function pruneCompiledRunCache() {
 }
 
 /**
- * Purpose: Provide the `getName` step in the Run view runtime flow.
- * How: Executes the get name logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `getName` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 export function getName() {
   return 'Run';
 }
 
 /**
- * Purpose: Provide the `render` step in the Run view runtime flow.
- * How: Executes the render logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `render` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 export async function render(container, { sha, runState, onRunStateChange }) {
   // Live auto-refresh can re-render Run without a view switch.
@@ -237,6 +253,10 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     container.classList.add('run-view-host-swapping');
   }
   container.appendChild(runRoot);
+  /**
+   * Purpose: Commit the new Run DOM mount after asynchronous render preparation.
+   * How: Removes pending state classes, drops previous view nodes, and clears swap host styling.
+   */
   const finalizeRunMount = () => {
     if (!runRoot.isConnected) return;
     runRoot.classList.remove('run-view-pending');
@@ -249,6 +269,10 @@ export async function render(container, { sha, runState, onRunStateChange }) {
       container.classList.remove('run-view-host-swapping');
     }
   };
+  /**
+   * Purpose: Roll back a partially mounted Run DOM tree when render is aborted.
+   * How: Removes transient mount nodes and restores host swap styling to default.
+   */
   const discardRunMount = () => {
     if (runRoot && runRoot.parentElement === container) {
       runRoot.remove();
@@ -274,8 +298,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   const noteEl = runRoot.querySelector('.run-note');
   let audioLocked = false;
   /**
-   * Purpose: Provide the `setAudioToggleState` step in the Run view runtime flow.
-   * How: Executes the set audio toggle state logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `setAudioToggleState` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const setAudioToggleState = (isOn) => {
     if (!audioToggleButton || !audioToggleValue) return;
@@ -286,8 +310,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
     audioToggleValue.textContent = safeIsOn ? 'On' : 'Off';
   };
   /**
-   * Purpose: Provide the `setAudioToggleDisabled` step in the Run view runtime flow.
-   * How: Executes the set audio toggle disabled logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `setAudioToggleDisabled` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const setAudioToggleDisabled = (disabled) => {
     if (!audioToggleButton) return;
@@ -302,8 +326,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   }
 
   /**
-   * Purpose: Provide the `setAudioLocked` step in the Run view runtime flow.
-   * How: Executes the set audio locked logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `setAudioLocked` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   function setAudioLocked(locked) {
     audioLocked = !!locked;
@@ -339,8 +363,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   paramMetaByPath = new Map();
   pendingOrbitUi = runState && runState.orbitUi ? runState.orbitUi : null;
   /**
-   * Purpose: Provide the `emitRunState` step in the Run view runtime flow.
-   * How: Executes the emit run state logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `emitRunState` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const emitRunState = () => {
     if (typeof onRunStateChange === 'function') {
@@ -380,8 +404,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   });
 
   /**
-   * Purpose: Provide the `renderInlineVirtualKeyboard` step in the Run view runtime flow.
-   * How: Executes the render inline virtual keyboard logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `renderInlineVirtualKeyboard` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const renderInlineVirtualKeyboard = () => {
     if (!midiInlineEl) return;
@@ -395,8 +419,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   };
 
   /**
-   * Purpose: Provide the `updateMidi` step in the Run view runtime flow.
-   * How: Executes the update midi logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `updateMidi` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const updateMidi = async () => {
     if (!midiInlineEl) return;
@@ -419,8 +443,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   };
 
   /**
-   * Purpose: Provide the `updateMidiSourceUi` step in the Run view runtime flow.
-   * How: Executes the update midi source ui logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `updateMidiSourceUi` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const updateMidiSourceUi = async (selectedValue = null) => {
     if (!midiInputSelect) return;
@@ -447,8 +471,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   };
 
   /**
-   * Purpose: Provide the `publishPolyphonyState` step in the Run view runtime flow.
-   * How: Executes the publish polyphony state logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `publishPolyphonyState` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   async function publishPolyphonyState() {
     try {
@@ -463,8 +487,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   }
 
   /**
-   * Purpose: Provide the `applyPolyphonyChange` step in the Run view runtime flow.
-   * How: Executes the apply polyphony change logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `applyPolyphonyChange` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   async function applyPolyphonyChange(nextVoices) {
     if (isSwitchingPolyphony) return;
@@ -542,8 +566,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   }
 
   /**
-   * Purpose: Provide the `startAudio` step in the Run view runtime flow.
-   * How: Executes the start audio logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `startAudio` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const startAudio = async () => {
     if (audioRunning) return;
@@ -608,8 +632,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   };
 
   /**
-   * Purpose: Provide the `stopAudio` step in the Run view runtime flow.
-   * How: Executes the stop audio logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `stopAudio` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const stopAudio = () => {
     if (!audioRunning) return;
@@ -640,8 +664,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   emitRunState();
 
   /**
-   * Purpose: Provide the `executeRemoteMidi` step in the Run view runtime flow.
-   * How: Executes the execute remote midi logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `executeRemoteMidi` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   async function executeRemoteMidi(runMidi) {
     if (!runMidi || typeof runMidi !== 'object') return;
@@ -676,8 +700,8 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   }
 
 /**
- * Purpose: Provide the `syncRemoteRunState` step in the Run view runtime flow.
- * How: Executes the sync remote run state logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `syncRemoteRunState` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 async function syncRemoteRunState() {
     if (!currentSha) return;
@@ -758,8 +782,8 @@ async function syncRemoteRunState() {
 }
 
 /**
- * Purpose: Provide the `getState` step in the Run view runtime flow.
- * How: Executes the get state logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `getState` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 export function getState() {
   if (!scopeState) return null;
@@ -788,16 +812,16 @@ export function getState() {
 }
 
 /**
- * Purpose: Provide the `markRunActivity` step in the Run view runtime flow.
- * How: Executes the mark run activity logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `markRunActivity` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function markRunActivity() {
   runActivityTick += 1;
   if (emitRunStateFn) emitRunStateFn();
 }
 /**
- * Purpose: Provide the `compileAndRenderUI` step in the Run view runtime flow.
- * How: Executes the compile and render ui logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `compileAndRenderUI` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
   const isStale = options && typeof options.isStale === 'function' ? options.isStale : null;
@@ -898,8 +922,8 @@ async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
 }
 
 /**
- * Purpose: Provide the `renderControls` step in the Run view runtime flow.
- * How: Executes the render controls logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `renderControls` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function renderControls(container, ui) {
   if (Array.isArray(ui) && ui.length > 0) {
@@ -913,8 +937,8 @@ function renderControls(container, ui) {
 }
 
 /**
- * Purpose: Provide the `collectParamPaths` step in the Run view runtime flow.
- * How: Executes the collect param paths logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `collectParamPaths` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function collectParamPaths(ui) {
   if (!Array.isArray(ui)) return [];
@@ -936,8 +960,8 @@ function collectParamPaths(ui) {
 }
 
 /**
- * Purpose: Provide the `seedParamValuesFromUiDefaults` step in the Run view runtime flow.
- * How: Executes the seed param values from ui defaults logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `seedParamValuesFromUiDefaults` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function seedParamValuesFromUiDefaults(ui) {
   if (!Array.isArray(ui)) return;
@@ -977,8 +1001,8 @@ function seedParamValuesFromUiDefaults(ui) {
   walk(ui);
 }
 /**
- * Purpose: Provide the `renderMidiKeyboard` step in the Run view runtime flow.
- * How: Executes the render midi keyboard logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `renderMidiKeyboard` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function renderMidiKeyboard(container, ui, handlers, options = {}) {
   if (!container) return;
@@ -1025,8 +1049,8 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
   });
 
   /**
-   * Purpose: Provide the `noteOn` step in the Run view runtime flow.
-   * How: Executes the note on logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `noteOn` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const noteOn = async (note) => {
     if (activeMidiNote !== null) return;
@@ -1037,8 +1061,8 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
     }
   };
   /**
-   * Purpose: Provide the `noteOff` step in the Run view runtime flow.
-   * How: Executes the note off logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `noteOff` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const noteOff = () => {
     if (activeMidiNote === null) return;
@@ -1051,8 +1075,8 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
   };
 
   /**
-   * Purpose: Provide the `onPointerDown` step in the Run view runtime flow.
-   * How: Executes the on pointer down logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `onPointerDown` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const onPointerDown = async (event) => {
     const key = event.target.closest('.midi-key');
@@ -1063,8 +1087,8 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
     await noteOn(note);
   };
   /**
-   * Purpose: Provide the `onPointerUp` step in the Run view runtime flow.
-   * How: Executes the on pointer up logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `onPointerUp` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const onPointerUp = (event) => {
     const key = event.target.closest('.midi-key');
@@ -1154,8 +1178,8 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
     hint.className = 'midi-hint';
   }
   /**
-   * Purpose: Provide the `updateMidiHint` step in the Run view runtime flow.
-   * How: Executes the update midi hint logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `updateMidiHint` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const updateMidiHint = () => {
     if (!hint) return;
@@ -1173,8 +1197,8 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
 }
 
 /**
- * Purpose: Provide the `setMidiUiKeyActive` step in the Run view runtime flow.
- * How: Executes the set midi ui key active logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `setMidiUiKeyActive` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function setMidiUiKeyActive(note, active) {
   const key = midiUiKeyByNote.get(note);
@@ -1183,8 +1207,8 @@ function setMidiUiKeyActive(note, active) {
 }
 
 /**
- * Purpose: Provide the `releaseComputerMidiNotes` step in the Run view runtime flow.
- * How: Executes the release computer midi notes logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `releaseComputerMidiNotes` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function releaseComputerMidiNotes(handlers) {
   const notes = new Set(midiComputerActiveNotes.values());
@@ -1198,8 +1222,8 @@ function releaseComputerMidiNotes(handlers) {
 }
 
 /**
- * Purpose: Provide the `detachComputerMidiKeyboard` step in the Run view runtime flow.
- * How: Executes the detach computer midi keyboard logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `detachComputerMidiKeyboard` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function detachComputerMidiKeyboard() {
   if (midiKeyboardKeyDownHandler) {
@@ -1226,8 +1250,8 @@ function detachComputerMidiKeyboard() {
 }
 
 /**
- * Purpose: Provide the `isTypingTarget` step in the Run view runtime flow.
- * How: Executes the is typing target logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `isTypingTarget` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function isTypingTarget(target) {
   if (!(target instanceof HTMLElement)) return false;
@@ -1237,8 +1261,8 @@ function isTypingTarget(target) {
 }
 
 /**
- * Purpose: Provide the `renderFaustUi` step in the Run view runtime flow.
- * How: Executes the render faust ui logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `renderFaustUi` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 async function renderFaustUi(container, ui) {
   ensureFaustUiCss();
@@ -1337,8 +1361,8 @@ async function renderFaustUi(container, ui) {
 }
 
 /**
- * Purpose: Provide the `renderOrbitUi` step in the Run view runtime flow.
- * How: Executes the render orbit ui logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `renderOrbitUi` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function renderOrbitUi(container, ui) {
   if (!container) return;
@@ -1441,8 +1465,8 @@ function scheduleOrbitLayoutRecovery(attempt = 0) {
 }
 
 /**
- * Purpose: Provide the `setupOrbitPaneResizeObserver` step in the Run view runtime flow.
- * How: Executes the setup orbit pane resize observer logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `setupOrbitPaneResizeObserver` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function setupOrbitPaneResizeObserver(container) {
   if (!container || typeof ResizeObserver === 'undefined') return;
@@ -1460,8 +1484,8 @@ function setupOrbitPaneResizeObserver(container) {
 }
 
 /**
- * Purpose: Provide the `teardownOrbitPaneResizeObserver` step in the Run view runtime flow.
- * How: Executes the teardown orbit pane resize observer logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `teardownOrbitPaneResizeObserver` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function teardownOrbitPaneResizeObserver() {
   if (orbitPaneResizeObserver) {
@@ -1475,8 +1499,8 @@ function teardownOrbitPaneResizeObserver() {
 }
 
 /**
- * Purpose: Provide the `collectOrbitSliders` step in the Run view runtime flow.
- * How: Executes the collect orbit sliders logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `collectOrbitSliders` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function collectOrbitSliders(ui) {
   if (!Array.isArray(ui)) return [];
@@ -1509,8 +1533,8 @@ function collectOrbitSliders(ui) {
 }
 
 /**
- * Purpose: Provide the `colorFromPath` step in the Run view runtime flow.
- * How: Executes the color from path logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `colorFromPath` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function colorFromPath(path) {
   let hash = 0;
@@ -1521,8 +1545,8 @@ function colorFromPath(path) {
   return `hsl(${hue} 68% 62%)`;
 }
 /**
- * Purpose: Provide the `shouldAutoDisableOrbitSlider` step in the Run view runtime flow.
- * How: Executes the should auto disable orbit slider logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `shouldAutoDisableOrbitSlider` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function shouldAutoDisableOrbitSlider(slider) {
   if (!slider) return false;
@@ -1534,8 +1558,8 @@ function shouldAutoDisableOrbitSlider(slider) {
 }
 
 /**
- * Purpose: Provide the `isOrbitSliderDisabled` step in the Run view runtime flow.
- * How: Executes the is orbit slider disabled logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `isOrbitSliderDisabled` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function isOrbitSliderDisabled(path) {
   return !!(orbitState && orbitState.disabledPaths && orbitState.disabledPaths.has(path));
@@ -1555,8 +1579,8 @@ function toggleOrbitSliderDisabled(path) {
   return true;
 }
 /**
- * Purpose: Provide the `setupOrbitCanvasResize` step in the Run view runtime flow.
- * How: Executes the setup orbit canvas resize logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `setupOrbitCanvasResize` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function setupOrbitCanvasResize() {
   teardownOrbitCanvasResize();
@@ -1579,8 +1603,8 @@ function setupOrbitCanvasResize() {
 }
 
 /**
- * Purpose: Provide the `teardownOrbitCanvasResize` step in the Run view runtime flow.
- * How: Executes the teardown orbit canvas resize logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `teardownOrbitCanvasResize` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function teardownOrbitCanvasResize() {
   if (orbitResizeObserver) {
@@ -1590,8 +1614,8 @@ function teardownOrbitCanvasResize() {
 }
 
 /**
- * Purpose: Provide the `resizeOrbitCanvas` step in the Run view runtime flow.
- * How: Executes the resize orbit canvas logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `resizeOrbitCanvas` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function resizeOrbitCanvas(options = {}) {
   if (!orbitCanvas || !orbitCtx || !orbitBody) return false;
@@ -1639,8 +1663,8 @@ function resizeOrbitCanvas(options = {}) {
 }
 
 /**
- * Purpose: Provide the `initOrbitState` step in the Run view runtime flow.
- * How: Executes the init orbit state logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `initOrbitState` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function initOrbitState(sliders, persisted) {
   if (!orbitCanvas) return;
@@ -1719,8 +1743,8 @@ function initOrbitState(sliders, persisted) {
 }
 
 /**
- * Purpose: Provide the `ensureOrbitRadii` step in the Run view runtime flow.
- * How: Executes the ensure orbit radii logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `ensureOrbitRadii` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function ensureOrbitRadii() {
   if (!orbitState) return;
@@ -1730,8 +1754,8 @@ function ensureOrbitRadii() {
 }
 
 /**
- * Purpose: Provide the `installOrbitPointerHandlers` step in the Run view runtime flow.
- * How: Executes the install orbit pointer handlers logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `installOrbitPointerHandlers` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function installOrbitPointerHandlers() {
   if (!orbitCanvas) return;
@@ -1829,8 +1853,8 @@ function installOrbitPointerHandlers() {
 }
 
 /**
- * Purpose: Provide the `orbitPointerPosition` step in the Run view runtime flow.
- * How: Executes the orbit pointer position logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `orbitPointerPosition` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function orbitPointerPosition(event) {
   const rect = orbitCanvas.getBoundingClientRect();
@@ -1846,8 +1870,8 @@ function orbitPointerPosition(event) {
 }
 
 /**
- * Purpose: Provide the `hitTestOrbit` step in the Run view runtime flow.
- * How: Executes the hit test orbit logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `hitTestOrbit` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function hitTestOrbit(x, y) {
   if (!orbitState) return null;
@@ -1871,8 +1895,8 @@ function hitTestOrbit(x, y) {
 }
 
 /**
- * Purpose: Provide the `updateOrbitCursor` step in the Run view runtime flow.
- * How: Executes the update orbit cursor logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `updateOrbitCursor` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function updateOrbitCursor(mode) {
   if (!orbitCanvas) return;
@@ -1892,8 +1916,8 @@ function updateOrbitCursor(mode) {
 }
 
 /**
- * Purpose: Provide the `applyOrbitValueForPath` step in the Run view runtime flow.
- * How: Executes the apply orbit value for path logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `applyOrbitValueForPath` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function applyOrbitValueForPath(path) {
   if (!orbitState) return;
@@ -1913,8 +1937,8 @@ function applyOrbitValueForPath(path) {
 }
 
 /**
- * Purpose: Provide the `applyOrbitValuesForAll` step in the Run view runtime flow.
- * How: Executes the apply orbit values for all logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `applyOrbitValuesForAll` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function applyOrbitValuesForAll() {
   if (!orbitState) return;
@@ -1934,8 +1958,8 @@ function applyOrbitValuesForAll() {
   if (emitRunStateFn) emitRunStateFn();
 }
 /**
- * Purpose: Provide the `sliderValueFromPosition` step in the Run view runtime flow.
- * How: Executes the slider value from position logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `sliderValueFromPosition` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function sliderValueFromPosition(slider, x, y) {
   if (!orbitState) return slider.min;
@@ -1950,8 +1974,8 @@ function sliderValueFromPosition(slider, x, y) {
 }
 
 /**
- * Purpose: Provide the `normalizedFromDistance` step in the Run view runtime flow.
- * How: Executes the normalized from distance logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `normalizedFromDistance` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function normalizedFromDistance(distance) {
   if (!orbitState) return 0;
@@ -1961,8 +1985,8 @@ function normalizedFromDistance(distance) {
 }
 
 /**
- * Purpose: Provide the `distanceFromNormalized` step in the Run view runtime flow.
- * How: Executes the distance from normalized logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `distanceFromNormalized` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function distanceFromNormalized(u) {
   if (!orbitState) return 0;
@@ -1970,8 +1994,8 @@ function distanceFromNormalized(u) {
   return orbitState.outerRadius - clamped * (orbitState.outerRadius - orbitState.innerRadius);
 }
 /**
- * Purpose: Provide the `syncOrbitFromParams` step in the Run view runtime flow.
- * How: Executes the sync orbit from params logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `syncOrbitFromParams` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function syncOrbitFromParams() {
   if (!orbitState) return;
@@ -2018,8 +2042,8 @@ function syncOrbitFromParams() {
 }
 
 /**
- * Purpose: Provide the `requestOrbitSyncFromParams` step in the Run view runtime flow.
- * How: Executes the request orbit sync from params logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `requestOrbitSyncFromParams` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function requestOrbitSyncFromParams(force = false) {
   if (!orbitUiInstance) return;
@@ -2049,8 +2073,8 @@ function requestOrbitSyncFromParams(force = false) {
 }
 
 /**
- * Purpose: Provide the `drawOrbitNow` step in the Run view runtime flow.
- * How: Executes the draw orbit now logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `drawOrbitNow` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function drawOrbitNow() {
   if (!orbitState || !orbitCtx || !orbitCanvas) return;
@@ -2139,16 +2163,16 @@ function drawOrbitNow() {
 }
 
 /**
- * Purpose: Provide the `shortOrbitLabel` step in the Run view runtime flow.
- * How: Executes the short orbit label logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `shortOrbitLabel` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function shortOrbitLabel(label) {
   if (!label) return '';
   const max = 16;
 }
 /**
- * Purpose: Provide the `scheduleOrbitDraw` step in the Run view runtime flow.
- * How: Executes the schedule orbit draw logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `scheduleOrbitDraw` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function scheduleOrbitDraw() {
   orbitNeedsDraw = true;
@@ -2161,8 +2185,8 @@ function scheduleOrbitDraw() {
   });
 }
 /**
- * Purpose: Provide the `constrainOrbitPositions` step in the Run view runtime flow.
- * How: Executes the constrain orbit positions logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `constrainOrbitPositions` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function constrainOrbitPositions() {
   if (!orbitState) return;
@@ -2175,8 +2199,8 @@ function constrainOrbitPositions() {
 }
 
 /**
- * Purpose: Provide the `buildRunOrbitSnapshot` step in the Run view runtime flow.
- * How: Executes the build run orbit snapshot logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `buildRunOrbitSnapshot` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function buildRunOrbitSnapshot(includeNonce = true) {
   if (!orbitUiInstance) return null;
@@ -2198,8 +2222,8 @@ function buildRunOrbitSnapshot(includeNonce = true) {
 }
 
 /**
- * Purpose: Provide the `mergeRemoteOrbitState` step in the Run view runtime flow.
- * How: Executes the merge remote orbit state logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `mergeRemoteOrbitState` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function mergeRemoteOrbitState(baseState, remoteOrbit) {
   const next = {
@@ -2249,8 +2273,8 @@ function mergeRemoteOrbitState(baseState, remoteOrbit) {
 }
 
 /**
- * Purpose: Provide the `sanitizeMergedOrbitState` step in the Run view runtime flow.
- * How: Executes the sanitize merged orbit state logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `sanitizeMergedOrbitState` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function sanitizeMergedOrbitState(baseState, mergedState) {
   const next = {
@@ -2462,8 +2486,8 @@ function forceOrbitReprojection(baseState, values) {
 }
 
 /**
- * Purpose: Provide the `clamp` step in the Run view runtime flow.
- * How: Executes the clamp logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `clamp` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -2473,8 +2497,8 @@ function collectButtonPaths(ui) {
   const paths = [];
   if (!Array.isArray(ui)) return paths;
   /**
-   * Purpose: Provide the `walk` step in the Run view runtime flow.
-   * How: Executes the walk logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `walk` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const walk = (node) => {
     if (!node) return;
@@ -2492,8 +2516,8 @@ function collectButtonPaths(ui) {
   return paths;
 }
 /**
- * Purpose: Provide the `installRunSpaceShortcut` step in the Run view runtime flow.
- * How: Executes the install run space shortcut logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `installRunSpaceShortcut` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function installRunSpaceShortcut() {
   if (runSpaceKeyHandler || runSpaceKeyUpHandler) return;
@@ -2541,8 +2565,8 @@ function installRunSpaceShortcut() {
 }
 
 /**
- * Purpose: Provide the `uninstallRunSpaceShortcut` step in the Run view runtime flow.
- * How: Executes the uninstall run space shortcut logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `uninstallRunSpaceShortcut` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function uninstallRunSpaceShortcut() {
   if (runSpaceKeyHandler) {
@@ -2567,8 +2591,8 @@ function uninstallRunSpaceShortcut() {
 }
 
 /**
- * Purpose: Provide the `releasePressedUiButtons` step in the Run view runtime flow.
- * How: Executes the release pressed ui buttons logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `releasePressedUiButtons` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function releasePressedUiButtons() {
   if (pressedUiButtons.size === 0) return;
@@ -2592,8 +2616,8 @@ function releasePressedUiButtons() {
 }
 
 /**
- * Purpose: Provide the `installUiReleaseGuard` step in the Run view runtime flow.
- * How: Executes the install ui release guard logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `installUiReleaseGuard` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function installUiReleaseGuard() {
   if (uiReleaseHandlersInstalled) return;
@@ -2606,8 +2630,8 @@ function installUiReleaseGuard() {
 }
 
 /**
- * Purpose: Provide the `uninstallUiReleaseGuard` step in the Run view runtime flow.
- * How: Executes the uninstall ui release guard logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `uninstallUiReleaseGuard` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function uninstallUiReleaseGuard() {
   if (!uiReleaseHandlersInstalled) return;
@@ -2622,8 +2646,8 @@ function uninstallUiReleaseGuard() {
 }
 
 /**
- * Purpose: Provide the `applyUiZoom` step in the Run view runtime flow.
- * How: Executes the apply ui zoom logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `applyUiZoom` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function applyUiZoom() {
   const zoomHost = controlsClassicPane || controlsContent;
@@ -2643,8 +2667,8 @@ function applyUiZoom() {
   uiZoomStage.style.height = `${naturalHeight * scale}px`;
 }
 /**
- * Purpose: Provide the `setupUiZoomObserver` step in the Run view runtime flow.
- * How: Executes the setup ui zoom observer logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `setupUiZoomObserver` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function setupUiZoomObserver() {
   teardownUiZoomObserver();
@@ -2656,8 +2680,8 @@ function setupUiZoomObserver() {
 }
 
 /**
- * Purpose: Provide the `teardownUiZoomObserver` step in the Run view runtime flow.
- * How: Executes the teardown ui zoom observer logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `teardownUiZoomObserver` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function teardownUiZoomObserver() {
   if (uiResizeObserver) {
@@ -2667,8 +2691,8 @@ function teardownUiZoomObserver() {
 }
 
 /**
- * Purpose: Provide the `ensureMidiAccess` step in the Run view runtime flow.
- * How: Executes the ensure midi access logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `ensureMidiAccess` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 async function ensureMidiAccess() {
   if (!('requestMIDIAccess' in navigator)) {
@@ -2686,8 +2710,8 @@ async function ensureMidiAccess() {
 }
 
 /**
- * Purpose: Provide the `refreshMidiInputs` step in the Run view runtime flow.
- * How: Executes the refresh midi inputs logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `refreshMidiInputs` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 async function refreshMidiInputs(selectEl, preferredValue) {
   selectEl.innerHTML = '';
@@ -2725,8 +2749,8 @@ async function refreshMidiInputs(selectEl, preferredValue) {
 }
 
 /**
- * Purpose: Provide the `selectMidiDevice` step in the Run view runtime flow.
- * How: Executes the select midi device logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `selectMidiDevice` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 async function selectMidiDevice(id) {
   const access = await ensureMidiAccess();
@@ -2757,8 +2781,8 @@ async function selectMidiDevice(id) {
 }
 
 /**
- * Purpose: Provide the `disconnectMidiDevice` step in the Run view runtime flow.
- * How: Executes the disconnect midi device logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `disconnectMidiDevice` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function disconnectMidiDevice() {
   if (midiInput) {
@@ -2768,8 +2792,8 @@ function disconnectMidiDevice() {
 }
 
 /**
- * Purpose: Provide the `findMidiTargets` step in the Run view runtime flow.
- * How: Executes the find midi targets logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `findMidiTargets` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function findMidiTargets(ui) {
   if (!Array.isArray(ui)) return null;
@@ -2792,8 +2816,8 @@ function findMidiTargets(ui) {
   walk(ui);
 
   /**
-   * Purpose: Provide the `findMatch` step in the Run view runtime flow.
-   * How: Executes the find match logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `findMatch` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const findMatch = (pattern) => {
     const regex = new RegExp(pattern, 'i');
@@ -2814,8 +2838,8 @@ function findMidiTargets(ui) {
 }
 
 /**
- * Purpose: Provide the `normalizeRunParamCell` step in the Run view runtime flow.
- * How: Executes the normalize run param cell logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `normalizeRunParamCell` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function normalizeRunParamCell(path, input, fallbackTs = Date.now()) {
   // Accept legacy numeric payloads and normalize to full ParamCell.
@@ -2839,8 +2863,8 @@ function normalizeRunParamCell(path, input, fallbackTs = Date.now()) {
 }
 
 /**
- * Purpose: Provide the `normalizeRunParamCells` step in the Run view runtime flow.
- * How: Executes the normalize run param cells logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `normalizeRunParamCells` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function normalizeRunParamCells(input, fallbackTs = Date.now()) {
   // Defensive normalization: invalid paths/cells are ignored.
@@ -2855,8 +2879,8 @@ function normalizeRunParamCells(input, fallbackTs = Date.now()) {
 }
 
 /**
- * Purpose: Provide the `cloneParamCells` step in the Run view runtime flow.
- * How: Executes the clone param cells logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `cloneParamCells` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function cloneParamCells(input) {
   const output = {};
@@ -2867,8 +2891,8 @@ function cloneParamCells(input) {
 }
 
 /**
- * Purpose: Provide the `clampParamValue` step in the Run view runtime flow.
- * How: Executes the clamp param value logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `clampParamValue` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function clampParamValue(path, value) {
   // Frontend clamp guarantees UI writes respect Faust min/max bounds.
@@ -2882,8 +2906,8 @@ function clampParamValue(path, value) {
 }
 
 /**
- * Purpose: Provide the `setParamCell` step in the Run view runtime flow.
- * How: Executes the set param cell logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `setParamCell` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function setParamCell(path, value, options = {}) {
   // Local LWW register update per parameter:
@@ -2921,8 +2945,8 @@ function setParamCell(path, value, options = {}) {
 }
 
 /**
- * Purpose: Provide the `clearLocalOwnerReleaseTimer` step in the Run view runtime flow.
- * How: Executes the clear local owner release timer logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `clearLocalOwnerReleaseTimer` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function clearLocalOwnerReleaseTimer(path) {
   const timer = localOwnerReleaseTimers.get(path);
@@ -2933,8 +2957,8 @@ function clearLocalOwnerReleaseTimer(path) {
 }
 
 /**
- * Purpose: Provide the `scheduleLocalOwnerRelease` step in the Run view runtime flow.
- * How: Executes the schedule local owner release logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `scheduleLocalOwnerRelease` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function scheduleLocalOwnerRelease(path, delayMs = LOCAL_OWNER_RELEASE_MS) {
   // Owner is held briefly after interaction updates to absorb dense UI events.
@@ -2952,8 +2976,8 @@ function scheduleLocalOwnerRelease(path, delayMs = LOCAL_OWNER_RELEASE_MS) {
 }
 
 /**
- * Purpose: Provide the `setParamValue` step in the Run view runtime flow.
- * How: Executes the set param value logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `setParamValue` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function setParamValue(path, value, options = {}) {
   if (!path) return;
@@ -3011,8 +3035,8 @@ function setParamValue(path, value, options = {}) {
 }
 
 /**
- * Purpose: Provide the `applyParamToDsp` step in the Run view runtime flow.
- * How: Executes the apply param to dsp logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `applyParamToDsp` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function applyParamToDsp(path, value, options = {}) {
   if (!dspNode) return;
@@ -3025,8 +3049,8 @@ function applyParamToDsp(path, value, options = {}) {
 }
 
 /**
- * Purpose: Provide the `clearParamSmooth` step in the Run view runtime flow.
- * How: Executes the clear param smooth logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `clearParamSmooth` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function clearParamSmooth(path) {
   const entry = paramSmooth.get(path);
@@ -3038,8 +3062,8 @@ function clearParamSmooth(path) {
 }
 
 /**
- * Purpose: Provide the `clearAllParamSmoothing` step in the Run view runtime flow.
- * How: Executes the clear all param smoothing logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `clearAllParamSmoothing` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function clearAllParamSmoothing() {
   for (const [path, entry] of paramSmooth.entries()) {
@@ -3051,8 +3075,8 @@ function clearAllParamSmoothing() {
 }
 
 /**
- * Purpose: Provide the `applyRemoteRunParams` step in the Run view runtime flow.
- * How: Executes the apply remote run params logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `applyRemoteRunParams` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function applyRemoteRunParams(remoteParams) {
   // Merge remote cells with local cells, honoring:
@@ -3106,8 +3130,8 @@ function applyRemoteRunParams(remoteParams) {
 }
 
 /**
- * Purpose: Provide the `fingerprintRunParams` step in the Run view runtime flow.
- * How: Executes the fingerprint run params logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `fingerprintRunParams` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function fingerprintRunParams(input) {
   // Fingerprint includes value + timestamp + owner to detect semantic changes only.
@@ -3119,8 +3143,8 @@ function fingerprintRunParams(input) {
 }
 
 /**
- * Purpose: Provide the `noteOnMidi` step in the Run view runtime flow.
- * How: Executes the note on midi logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `noteOnMidi` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function noteOnMidi(note, velocity) {
   markRunActivity();
@@ -3151,8 +3175,8 @@ function noteOnMidi(note, velocity) {
 }
 
 /**
- * Purpose: Provide the `noteOffMidi` step in the Run view runtime flow.
- * How: Executes the note off midi logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `noteOffMidi` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function noteOffMidi(note = null) {
   markRunActivity();
@@ -3178,8 +3202,8 @@ function noteOffMidi(note = null) {
 }
 
 /**
- * Purpose: Provide the `applyParamValues` step in the Run view runtime flow.
- * How: Executes the apply param values logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `applyParamValues` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function applyParamValues() {
   for (const [path, cell] of Object.entries(paramCells)) {
@@ -3205,8 +3229,8 @@ function applyParamValues() {
 }
 
 /**
- * Purpose: Provide the `normalizeRestoredParamValue` step in the Run view runtime flow.
- * How: Executes the normalize restored param value logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `normalizeRestoredParamValue` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function normalizeRestoredParamValue(path, value) {
   // Faust buttons are impulse controls and must not stay latched on restore.
@@ -3215,8 +3239,8 @@ function normalizeRestoredParamValue(path, value) {
 }
 
 /**
- * Purpose: Provide the `normalizeLatchedButtonParams` step in the Run view runtime flow.
- * How: Executes the normalize latched button params logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `normalizeLatchedButtonParams` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function normalizeLatchedButtonParams() {
   let changed = false;
@@ -3237,8 +3261,8 @@ function normalizeLatchedButtonParams() {
 }
 
 /**
- * Purpose: Provide the `resetUiButtonsToZero` step in the Run view runtime flow.
- * How: Executes the reset ui buttons to zero logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `resetUiButtonsToZero` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function resetUiButtonsToZero() {
   if (uiButtonPaths.size === 0) return;
@@ -3266,8 +3290,8 @@ function resetUiButtonsToZero() {
   }
 }
 /**
- * Purpose: Provide the `attachOutputParamHandler` step in the Run view runtime flow.
- * How: Executes the attach output param handler logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `attachOutputParamHandler` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function attachOutputParamHandler() {
   if (!dspNode || typeof dspNode.setOutputParamHandler !== 'function') return;
@@ -3294,8 +3318,8 @@ function attachOutputParamHandler() {
 }
 
 /**
- * Purpose: Provide the `startParamPolling` step in the Run view runtime flow.
- * How: Executes the start param polling logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `startParamPolling` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function startParamPolling() {
   // Fallback bridge when DSP output handler is unavailable:
@@ -3336,8 +3360,8 @@ function startParamPolling() {
 }
 
 /**
- * Purpose: Provide the `stopParamPolling` step in the Run view runtime flow.
- * How: Executes the stop param polling logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `stopParamPolling` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function stopParamPolling() {
   if (paramPollId) {
@@ -3347,8 +3371,8 @@ function stopParamPolling() {
 }
 
 /**
- * Purpose: Provide the `updateUiRoot` step in the Run view runtime flow.
- * How: Executes the update ui root logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `updateUiRoot` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function updateUiRoot(container) {
   currentUiRoot =
@@ -3356,8 +3380,8 @@ function updateUiRoot(container) {
 }
 
 /**
- * Purpose: Provide the `prepareControlsContainer` step in the Run view runtime flow.
- * How: Executes the prepare controls container logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `prepareControlsContainer` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function prepareControlsContainer(container) {
   const hasExistingContent = !!container.querySelector('.run-controls-content');
@@ -3385,6 +3409,10 @@ function prepareControlsContainer(container) {
   return { bg, content, split, classicPane, orbitPane, hasExistingContent };
 }
 
+/**
+ * Purpose: Finalize controls-panel DOM swap without clearing panel backgrounds.
+ * How: Removes stale controls nodes while preserving the currently active background/content nodes.
+ */
 function finalizeControlsContainerSwap(container, keepBg, keepContent) {
   if (!container) return;
   const staleNodes = container.querySelectorAll('.run-controls-bg, .run-controls-content');
@@ -3394,8 +3422,8 @@ function finalizeControlsContainerSwap(container, keepBg, keepContent) {
   }
 }
 /**
- * Purpose: Provide the `ensureFaustUiCss` step in the Run view runtime flow.
- * How: Executes the ensure faust ui css logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `ensureFaustUiCss` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function ensureFaustUiCss() {
   if (document.getElementById('faust-ui-css')) return;
@@ -3407,8 +3435,8 @@ function ensureFaustUiCss() {
 }
 
 /**
- * Purpose: Provide the `sendSpectrumSnapshot` step in the Run view runtime flow.
- * How: Executes the send spectrum snapshot logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `sendSpectrumSnapshot` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function sendSpectrumSnapshot(scope, data, meta) {
   const now = Date.now();
@@ -3447,8 +3475,8 @@ function sendSpectrumSnapshot(scope, data, meta) {
 }
 
 /**
- * Purpose: Provide the `buildSpectrumSummary` step in the Run view runtime flow.
- * How: Executes the build spectrum summary logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `buildSpectrumSummary` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function buildSpectrumSummary(scope, data, meta) {
   if (!Array.isArray(data) || data.length < 8) return null;
@@ -3492,8 +3520,8 @@ function buildSpectrumSummary(scope, data, meta) {
 }
 
 /**
- * Purpose: Provide the `buildLogBands` step in the Run view runtime flow.
- * How: Executes the build log bands logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `buildLogBands` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function buildLogBands(data, sampleRate, fmin, fmax, count, floorDb) {
   const bands = [];
@@ -3521,8 +3549,8 @@ function buildLogBands(data, sampleRate, fmin, fmax, count, floorDb) {
 }
 
 /**
- * Purpose: Provide the `detectTopPeaks` step in the Run view runtime flow.
- * How: Executes the detect top peaks logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `detectTopPeaks` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function detectTopPeaks(data, sampleRate, fmax, floorDb, peaksCount) {
   const binCount = data.length;
@@ -3541,8 +3569,8 @@ function detectTopPeaks(data, sampleRate, fmax, floorDb, peaksCount) {
 }
 
 /**
- * Purpose: Provide the `estimatePeakQ` step in the Run view runtime flow.
- * How: Executes the estimate peak q logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `estimatePeakQ` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function estimatePeakQ(data, peakIndex, sampleRate) {
   const peakDb = data[peakIndex];
@@ -3560,8 +3588,8 @@ function estimatePeakQ(data, peakIndex, sampleRate) {
   return Number((peakHz / bandwidth).toFixed(2));
 }
 /**
- * Purpose: Provide the `computeSpectrumFeatures` step in the Run view runtime flow.
- * How: Executes the compute spectrum features logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `computeSpectrumFeatures` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function computeSpectrumFeatures(data, sampleRate, fmax, floorDb) {
   const eps = 1e-12;
@@ -3591,8 +3619,8 @@ function computeSpectrumFeatures(data, sampleRate, fmax, floorDb) {
 }
 
 /**
- * Purpose: Provide the `computeAudioQuality` step in the Run view runtime flow.
- * How: Executes the compute audio quality logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `computeAudioQuality` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function computeAudioQuality(samples) {
   if (!samples || samples.length < 2) {
@@ -3653,8 +3681,8 @@ function computeAudioQuality(samples) {
 }
 
 /**
- * Purpose: Provide the `computeRolloff95` step in the Run view runtime flow.
- * How: Executes the compute rolloff95 logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `computeRolloff95` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function computeRolloff95(powers, fmax) {
   let total = 0;
@@ -3672,8 +3700,8 @@ function computeRolloff95(powers, fmax) {
 }
 
 /**
- * Purpose: Provide the `computeFlatness` step in the Run view runtime flow.
- * How: Executes the compute flatness logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `computeFlatness` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function computeFlatness(powers) {
   const eps = 1e-12;
@@ -3691,8 +3719,8 @@ function computeFlatness(powers) {
 }
 
 /**
- * Purpose: Provide the `sendRunParamsSnapshot` step in the Run view runtime flow.
- * How: Executes the send run params snapshot logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `sendRunParamsSnapshot` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function sendRunParamsSnapshot(force = false) {
   // Periodically publish the full ParamCell map to backend arbitration.
@@ -3711,8 +3739,8 @@ function sendRunParamsSnapshot(force = false) {
 }
 
 /**
- * Purpose: Provide the `executeLocalTrigger` step in the Run view runtime flow.
- * How: Executes the execute local trigger logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `executeLocalTrigger` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 async function executeLocalTrigger(path, holdMs) {
   if (!path || typeof path !== 'string') return;
@@ -3730,8 +3758,8 @@ async function executeLocalTrigger(path, holdMs) {
   sendRunParamsSnapshot(true);
 }
 /**
- * Purpose: Provide the `sleep` step in the Run view runtime flow.
- * How: Executes the sleep logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `sleep` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -3792,8 +3820,8 @@ function applyRunState(runState, controls) {
 }
 
 /**
- * Purpose: Provide the `dispose` step in the Run view runtime flow.
- * How: Executes the dispose logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `dispose` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 export function dispose() {
   // Full teardown is required because Run can be re-rendered in place
@@ -3878,8 +3906,8 @@ export function dispose() {
 }
 
 /**
- * Purpose: Provide the `cleanupAudio` step in the Run view runtime flow.
- * How: Executes the cleanup audio logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `cleanupAudio` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function cleanupAudio() {
   releasePressedUiButtons();
@@ -3919,8 +3947,8 @@ function cleanupAudio() {
 }
 
 /**
- * Purpose: Provide the `createScopeState` step in the Run view runtime flow.
- * How: Executes the create scope state logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `createScopeState` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function createScopeState(canvas) {
   const ctx = canvas.getContext('2d');
@@ -3944,8 +3972,8 @@ function createScopeState(canvas) {
 }
 
 /**
- * Purpose: Provide the `setupScope` step in the Run view runtime flow.
- * How: Executes the setup scope logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `setupScope` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function setupScope(context, node, scope) {
   resizeCanvasToDisplaySize(scope.canvas, scope.ctx);
@@ -3963,8 +3991,8 @@ function setupScope(context, node, scope) {
   const freqBuffer = new Float32Array(analyserNode.frequencyBinCount);
 
   /**
-   * Purpose: Provide the `draw` step in the Run view runtime flow.
-   * How: Executes the draw logic to update audio, MIDI, UI, or synchronization state as needed.
+   * Purpose: Implement `draw` in the Run view.
+   * How: Updates Run view audio, MIDI, UI, and sync state for this step.
    */
   const draw = () => {
     analyserNode.getFloatTimeDomainData(buffer);
@@ -3994,8 +4022,8 @@ function setupScope(context, node, scope) {
 }
 
 /**
- * Purpose: Provide the `startAudioOutput` step in the Run view runtime flow.
- * How: Executes the start audio output logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `startAudioOutput` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function startAudioOutput() {
   if (!audioContext || !outputNode) return;
@@ -4009,8 +4037,8 @@ function startAudioOutput() {
 }
 
 /**
- * Purpose: Provide the `stopAudioOutput` step in the Run view runtime flow.
- * How: Executes the stop audio output logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `stopAudioOutput` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function stopAudioOutput() {
   if (!outputNode) return;
@@ -4023,8 +4051,8 @@ function stopAudioOutput() {
 }
 
 /**
- * Purpose: Provide the `resumeAudioContext` step in the Run view runtime flow.
- * How: Executes the resume audio context logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `resumeAudioContext` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 async function resumeAudioContext() {
   if (!audioContext) return;
@@ -4039,8 +4067,8 @@ async function resumeAudioContext() {
 }
 
 /**
- * Purpose: Provide the `findTriggeredWindow` step in the Run view runtime flow.
- * How: Executes the find triggered window logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `findTriggeredWindow` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function findTriggeredWindow(buffer, scope) {
   const threshold = scope.threshold;
@@ -4066,8 +4094,8 @@ function findTriggeredWindow(buffer, scope) {
 }
 
 /**
- * Purpose: Provide the `extractWindow` step in the Run view runtime flow.
- * How: Executes the extract window logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `extractWindow` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function extractWindow(buffer, start, size) {
   const out = new Float32Array(size);
@@ -4078,8 +4106,8 @@ function extractWindow(buffer, start, size) {
 }
 
 /**
- * Purpose: Provide the `drawScope` step in the Run view runtime flow.
- * How: Executes the draw scope logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `drawScope` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function drawScope(scope, data) {
   resizeCanvasToDisplaySize(scope.canvas, scope.ctx);
@@ -4113,8 +4141,8 @@ function drawScope(scope, data) {
 }
 
 /**
- * Purpose: Provide the `drawScopePlaceholder` step in the Run view runtime flow.
- * How: Executes the draw scope placeholder logic to keep the scope grid visible when audio rendering is inactive.
+ * Purpose: Implement `drawScopePlaceholder` in the Run view.
+ * How: Keeps the scope grid visible while audio rendering is inactive.
  */
 function drawScopePlaceholder(scope) {
   if (!scope || !scope.ctx || !scope.canvas) return;
@@ -4137,8 +4165,8 @@ function drawScopePlaceholder(scope) {
 }
 
 /**
- * Purpose: Provide the `drawScopeGrid` step in the Run view runtime flow.
- * How: Executes the draw scope grid logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `drawScopeGrid` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function drawScopeGrid(ctx, width, height) {
   const major = 4;
@@ -4190,8 +4218,8 @@ function drawScopeGrid(ctx, width, height) {
 }
 
 /**
- * Purpose: Provide the `drawSpectrum` step in the Run view runtime flow.
- * How: Executes the draw spectrum logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `drawSpectrum` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function drawSpectrum(scope, data) {
   resizeCanvasToDisplaySize(scope.canvas, scope.ctx);
@@ -4270,8 +4298,8 @@ function drawSpectrum(scope, data) {
 }
 
 /**
- * Purpose: Provide the `drawFreqAxis` step in the Run view runtime flow.
- * How: Executes the draw freq axis logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `drawFreqAxis` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function drawFreqAxis(ctx, width, height, fmin, fmax, scale) {
   ctx.save();
@@ -4304,8 +4332,8 @@ function drawFreqAxis(ctx, width, height, fmin, fmax, scale) {
 }
 
 /**
- * Purpose: Provide the `drawSpectrumGrid` step in the Run view runtime flow.
- * How: Executes the draw spectrum grid logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `drawSpectrumGrid` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function drawSpectrumGrid(ctx, width, height, scope) {
   const linear = scope.spectrumScale === 'linear';
@@ -4370,8 +4398,8 @@ function drawSpectrumGrid(ctx, width, height, scope) {
   }
 }
 /**
- * Purpose: Provide the `getCanvasSize` step in the Run view runtime flow.
- * How: Executes the get canvas size logic to update audio, MIDI, UI, or synchronization state as needed.
+ * Purpose: Implement `getCanvasSize` in the Run view.
+ * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 function getCanvasSize(canvas) {
   return { width: canvas.clientWidth, height: canvas.clientHeight };

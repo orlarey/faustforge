@@ -4,8 +4,8 @@ import * as fs from 'fs';
 import { CONFIG } from './config';
 
 const DOCKER_IMAGE = 'ghcr.io/orlarey/faustdocker:main';
-const TIMEOUT_MS = 30000; // 30 secondes
-const VERSION_TIMEOUT_MS = 10000; // 10 secondes
+const TIMEOUT_MS = 30000; // 30 seconds
+const VERSION_TIMEOUT_MS = 10000; // 10 seconds
 
 let cachedFaustVersion: string | null = null;
 let cachedFaustHelp: string | null = null;
@@ -21,12 +21,8 @@ export interface DockerResult {
 }
 
 /**
- * Exécute le compilateur Faust dans un conteneur Docker
- *
- * @param sessionPath - Chemin absolu vers le répertoire de session
- * @param filename - Nom du fichier .dsp à compiler
- * @param args - Arguments additionnels pour faust
- * @returns Résultat de l'exécution
+ * Purpose: Run Faust compilation commands in the Docker toolchain container.
+ * How: Binds one session directory into `/tmp`, executes `faust` with requested arguments, and returns captured process output.
  */
 export function runFaustDocker(
   sessionPath: string,
@@ -35,9 +31,8 @@ export function runFaustDocker(
 ): Promise<DockerResult> {
   return new Promise((resolve) => {
     const mountPath = resolveDockerMountPath(sessionPath);
-    // Construire la commande Docker
-    // Monte tout le répertoire session dans /tmp du conteneur
-    // Le fichier source est dans /tmp/sourcecode/<filename>
+    // Build docker command with session mount under /tmp.
+    // Source file is located at /tmp/sourcecode/<filename> inside the container.
     const dockerArgs = [
       'run',
       '--rm',
@@ -55,7 +50,7 @@ export function runFaustDocker(
 
     const proc = spawn('docker', dockerArgs);
 
-    // Timeout
+    // Enforce compilation timeout.
     const timer = setTimeout(() => {
       killed = true;
       try {
@@ -67,6 +62,10 @@ export function runFaustDocker(
       finalize(null);
     }, TIMEOUT_MS);
 
+    /**
+     * Purpose: Finalize one docker run resolution exactly once.
+     * How: Clears timeout, chooses timeout or process-exit result shape, and resolves the outer promise.
+     */
     const finalize = (code: number | null) => {
       if (finished) return;
       finished = true;
@@ -96,7 +95,7 @@ export function runFaustDocker(
       stderr += data.toString();
     });
 
-    // Use both events so we do not hang if one of them is missed.
+    // Use both events so resolution does not hang if one signal is missed.
     proc.on('exit', (code) => {
       finalize(code);
     });
@@ -118,6 +117,10 @@ export function runFaustDocker(
   });
 }
 
+/**
+ * Purpose: Resolve the host path to mount for dockerized compilation.
+ * How: Maps the in-container session path back to configured host sessions directory when available, then normalizes for Docker Desktop.
+ */
 function resolveDockerMountPath(sessionPath: string): string {
   if (!HOST_SESSIONS_DIR) {
     return toDockerDesktopHostPath(sessionPath);
@@ -135,16 +138,28 @@ function resolveDockerMountPath(sessionPath: string): string {
   return toDockerDesktopHostPath(hostPath);
 }
 
+/**
+ * Purpose: Normalize a filesystem path to POSIX format for stable prefix checks.
+ * How: Converts backslashes to slashes and applies `path.posix.normalize`.
+ */
 function normalizePosix(input: string): string {
   const slashed = input.replace(/\\/g, '/');
   return path.posix.normalize(slashed);
 }
 
+/**
+ * Purpose: Determine whether one normalized path is inside another.
+ * How: Checks exact equality or a slash-prefixed subtree relationship.
+ */
 function isInTree(candidate: string, base: string): boolean {
   if (candidate === base) return true;
   return candidate.startsWith(`${base}/`);
 }
 
+/**
+ * Purpose: Join a host base path and relative path while preserving platform conventions.
+ * How: Uses explicit Windows-drive handling and POSIX joining for other paths.
+ */
 function joinHostPath(base: string, relative: string): string {
   if (!relative) return base;
   const winMatch = WINDOWS_ABS_PATH_RE.exec(base);
@@ -156,6 +171,10 @@ function joinHostPath(base: string, relative: string): string {
   return path.posix.join(base, relative);
 }
 
+/**
+ * Purpose: Convert Windows absolute paths to Docker Desktop mount-compatible paths.
+ * How: Rewrites `C:\\...` style paths to `/run/desktop/mnt/host/c/...` and leaves non-Windows paths unchanged.
+ */
 function toDockerDesktopHostPath(input: string): string {
   const winMatch = WINDOWS_ABS_PATH_RE.exec(input);
   if (!winMatch) {
@@ -166,6 +185,10 @@ function toDockerDesktopHostPath(input: string): string {
   return `/run/desktop/mnt/host/${drive}/${rest}`;
 }
 
+/**
+ * Purpose: Run a lightweight docker command with timeout and merged output capture.
+ * How: Spawns `docker`, collects stdout/stderr, enforces timeout kill, and returns trimmed output plus timeout flag.
+ */
 function runDockerSimple(args: string[], timeoutMs: number): Promise<{ output: string; timedOut: boolean }> {
   return new Promise((resolve) => {
     let stdout = '';
@@ -175,6 +198,10 @@ function runDockerSimple(args: string[], timeoutMs: number): Promise<{ output: s
 
     const proc = spawn('docker', args);
 
+    /**
+     * Purpose: Complete one simple docker command execution.
+     * How: Clears timer, guards against double completion, and resolves with captured output metadata.
+     */
     const finalize = () => {
       if (finished) return;
       finished = true;
@@ -210,7 +237,8 @@ function runDockerSimple(args: string[], timeoutMs: number): Promise<{ output: s
 }
 
 /**
- * Récupère la version du compilateur Faust via Docker
+ * Purpose: Retrieve and cache Faust compiler version text.
+ * How: Executes `docker run ... -v`, extracts first output line, truncates display length, and memoizes result.
  */
 export async function getFaustVersion(): Promise<string> {
   if (cachedFaustVersion) {
@@ -228,7 +256,8 @@ export async function getFaustVersion(): Promise<string> {
 }
 
 /**
- * Récupère l'aide du compilateur Faust (`faust -h`) via Docker.
+ * Purpose: Retrieve and cache Faust compiler help text.
+ * How: Executes `docker run ... -h`, captures combined output, and memoizes full help payload.
  */
 export async function getFaustHelp(): Promise<string> {
   if (cachedFaustHelp) {
@@ -244,14 +273,15 @@ export async function getFaustHelp(): Promise<string> {
 }
 
 /**
- * Analyse un fichier Faust (génère C++, SVG, et graphes DOT)
+ * Purpose: Analyze a Faust source and generate all primary session artifacts.
+ * How: Runs a main compilation pass for C++/SVG/signals, persists errors, then runs an optional tasks graph pass.
  */
 export async function analyzeFaust(
   sessionPath: string,
   filename: string
 ): Promise<{ success: boolean; errors: string }> {
-  // Passe principale (bloquante): C++, SVG et signaux.
-  // Les fichiers sont écrits à la racine de /tmp (= session).
+  // Main blocking pass: C++, SVG, and signals graph.
+  // Artifacts are written in /tmp (the mounted session root).
   const analyzeArgs = [
     '-o', 'generated.cpp',
     '-svg',
@@ -260,17 +290,17 @@ export async function analyzeFaust(
 
   const result = await runFaustDocker(sessionPath, filename, analyzeArgs);
 
-  // Écrire les erreurs dans errors.log
+  // Persist compiler diagnostics in errors.log.
   const errorsPath = path.join(sessionPath, 'errors.log');
   fs.writeFileSync(errorsPath, result.stderr, 'utf8');
 
-  // Déplacer les artefacts de la passe principale.
+  // Move artifacts generated by the main pass.
   if (result.success) {
     moveSvgFiles(sessionPath, filename);
     moveDotFile(sessionPath, filename, '-sig.dot', 'signals.dot');
 
-    // Passe tasks (non bloquante): nécessite -vec avec -tg.
-    // Si cette passe échoue, on conserve la session utilisable sans tasks.dot.
+    // Non-blocking tasks pass: requires -vec with -tg.
+    // Keep session usable even if tasks graph generation fails.
     const tasksResult = await runFaustDocker(sessionPath, filename, ['-vec', '-tg']);
     if (tasksResult.success) {
       moveDotFile(sessionPath, filename, '.dot', 'tasks.dot');
@@ -283,6 +313,10 @@ export async function analyzeFaust(
   };
 }
 
+/**
+ * Purpose: Parse free-form Faust compiler flags into argument tokens.
+ * How: Trims the incoming text and splits on whitespace.
+ */
 function parseFaustFlags(flags: string): string[] {
   const text = String(flags || '').trim();
   if (!text) return [];
@@ -290,7 +324,8 @@ function parseFaustFlags(flags: string): string[] {
 }
 
 /**
- * Compile uniquement le C++ généré avec un jeu d'options Faust.
+ * Purpose: Compile only the generated C++ output with custom Faust flags.
+ * How: Parses user-provided flags, appends C++ output target, and runs dockerized Faust compilation.
  */
 export async function compileFaustCpp(
   sessionPath: string,
@@ -307,22 +342,23 @@ export async function compileFaustCpp(
 }
 
 /**
- * Déplace les fichiers SVG générés vers le répertoire svg/
+ * Purpose: Relocate generated SVG artifacts to the canonical session `svg/` folder.
+ * How: Copies every `.svg` from Faust output directory and removes the temporary source folder.
  */
 function moveSvgFiles(sessionPath: string, filename: string): void {
   const sourcecodePath = path.join(sessionPath, 'sourcecode');
   const svgDestDir = path.join(sessionPath, 'svg');
 
-  // Le compilateur Faust crée un répertoire <filename>-svg/ dans sourcecode/
+  // Faust writes SVG files into `<filename>-svg/` under sourcecode/.
   const baseName = filename.replace('.dsp', '');
   const svgSourceDir = path.join(sourcecodePath, `${baseName}-svg`);
 
   try {
     if (fs.existsSync(svgSourceDir)) {
-      // Créer le répertoire destination
+      // Ensure destination directory exists.
       fs.mkdirSync(svgDestDir, { recursive: true });
 
-      // Copier tous les fichiers SVG
+      // Copy every SVG artifact.
       const files = fs.readdirSync(svgSourceDir);
       for (const file of files) {
         if (file.endsWith('.svg')) {
@@ -332,16 +368,17 @@ function moveSvgFiles(sessionPath: string, filename: string): void {
         }
       }
 
-      // Supprimer le répertoire source
+      // Remove temporary source directory.
       fs.rmSync(svgSourceDir, { recursive: true, force: true });
     }
   } catch {
-    // Ignorer les erreurs de déplacement
+    // Ignore artifact move failures.
   }
 }
 
 /**
- * Déplace un graphe DOT généré vers un emplacement de session stable.
+ * Purpose: Move one generated DOT graph to a stable session-level destination file.
+ * How: Tries known source locations, copies first existing candidate, and leaves silently on failures.
  */
 function moveDotFile(
   sessionPath: string,
@@ -361,22 +398,23 @@ function moveDotFile(
     if (!dotSource) return;
     fs.copyFileSync(dotSource, dotDest);
   } catch {
-    // Ignorer les erreurs de déplacement
+    // Ignore artifact move failures.
   }
 }
 
 /**
- * Compile un fichier Faust vers WebAssembly
+ * Purpose: Compile one Faust source file into WebAssembly assets.
+ * How: Ensures `wasm/` exists, runs Faust with `-lang wasm`, and returns compile status and diagnostics.
  */
 export async function compileFaustWasm(
   sessionPath: string,
   filename: string
 ): Promise<{ success: boolean; errors: string }> {
-  // Créer le répertoire wasm/
+  // Ensure wasm output directory exists.
   const wasmDir = path.join(sessionPath, 'wasm');
   fs.mkdirSync(wasmDir, { recursive: true });
 
-  // Arguments pour la compilation WASM
+  // WASM compilation arguments.
   const args = [
     '-lang', 'wasm',
     '-o', 'wasm/main.wasm'
@@ -391,7 +429,8 @@ export async function compileFaustWasm(
 }
 
 /**
- * Compile un fichier Faust vers WebAssembly (mode wasm-i pour exécution web)
+ * Purpose: Compile one Faust source file into runtime WebAssembly assets (`wasm-i`).
+ * How: Ensures `wasm/` exists, runs Faust with `-lang wasm-i`, and returns compile status and diagnostics.
  */
 export async function compileFaustWasmRun(
   sessionPath: string,
@@ -414,7 +453,8 @@ export async function compileFaustWasmRun(
 }
 
 /**
- * Génère une webapp PWA avec faust2wasm-ts
+ * Purpose: Generate a PWA webapp bundle from one Faust source.
+ * How: Reuses existing webapp when present, otherwise executes `npx faust2wasm-ts` in source directory and validates output.
  */
 export function compileFaustWebapp(
   sessionPath: string,
