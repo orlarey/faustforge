@@ -276,7 +276,12 @@ export async function render(container, { sha, scrollState, onScrollChange, onDo
                 <option value="200">200%</option>
               </select>
             </div>
-            <button class="primary-btn code-download-btn toolbar-download-right" type="button">Download</button>
+            <div class="download-select-group toolbar-download-right">
+              <button class="download-select-btn code-download-btn" type="button">Download</button>
+              <select class="download-select-value code-download-format" aria-label="C++ download format">
+                <option value="cpp">.cpp</option>
+              </select>
+            </div>
           </div>
         </div>
         <div class="code-flags-status"></div>
@@ -301,13 +306,15 @@ export async function render(container, { sha, scrollState, onScrollChange, onDo
     const presetMenu = container.querySelector('.code-preset-menu');
     const flagsHelp = container.querySelector('.code-flags-help');
     const downloadBtn = container.querySelector('.code-download-btn');
+    const downloadFormat = container.querySelector('.code-download-format');
     const flagsStatus = container.querySelector('.code-flags-status');
     const helpPanel = container.querySelector('.code-help-panel');
     const helpContent = container.querySelector('.code-help-content');
     const helpClose = container.querySelector('.code-help-close');
     if (downloadBtn && typeof onDownload === 'function') {
       downloadBtn.addEventListener('click', () => {
-        void onDownload();
+        const format = downloadFormat ? downloadFormat.value : '';
+        void onDownload(format);
       });
     }
 

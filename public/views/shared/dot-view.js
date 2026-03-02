@@ -47,6 +47,31 @@ function renderDotViewer(dotRoot, dot) {
 }
 
 /**
+ * Purpose: Build a safe base filename from one session source filename.
+ * How: Removes a trailing `.dsp` extension when present and falls back to `session`.
+ */
+function getBaseFilename(sessionFilename) {
+  const base = String(sessionFilename || '').replace(/\.dsp$/i, '').trim();
+  return base || 'session';
+}
+
+/**
+ * Purpose: Download one SVG string as a local file.
+ * How: Builds a Blob URL from SVG text, triggers a temporary anchor download, and revokes the URL.
+ */
+function downloadSvgText(filename, svgText) {
+  const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+/**
  * Purpose: Convert viz.js errors into a user-facing message.
  * How: Detects memory/complexity failures and falls back to a concise title/detail structure.
  */
@@ -144,7 +169,8 @@ export async function renderDotGraphView(container, options) {
     zoomAriaLabel,
     onError,
     onClearError,
-    onDownload
+    onDownload,
+    sessionFilename
   } = options || {};
 
   let dot = '';
@@ -180,7 +206,13 @@ export async function renderDotGraphView(container, options) {
             </select>
           </div>
           <button class="${classPrefix}-toggle-split" title="Show/hide split graph and DOT source">Split view</button>
-          <button class="primary-btn ${classPrefix}-download-btn toolbar-download-right" type="button">Download</button>
+          <div class="download-select-group toolbar-download-right">
+            <button class="download-select-btn ${classPrefix}-download-btn" type="button">Download</button>
+            <select class="download-select-value ${classPrefix}-download-format" aria-label="${title} download format">
+              <option value="dot">.dot</option>
+              <option value="svg" selected>.svg</option>
+            </select>
+          </div>
         </div>
       </div>
       <div class="${classPrefix}-main">
@@ -198,6 +230,7 @@ export async function renderDotGraphView(container, options) {
   const splitter = container.querySelector(`.${classPrefix}-splitter`);
   const zoomSelect = container.querySelector(`.${classPrefix}-zoom-select`);
   const downloadBtn = container.querySelector(`.${classPrefix}-download-btn`);
+  const downloadFormat = container.querySelector(`.${classPrefix}-download-format`);
   const toggleDotBtn = container.querySelector(`.${classPrefix}-toggle-split`);
   const containerEl = container.querySelector(`.${classPrefix}-container`);
   const mainEl = container.querySelector(`.${classPrefix}-main`);
@@ -243,7 +276,24 @@ export async function renderDotGraphView(container, options) {
   });
   if (downloadBtn && typeof onDownload === 'function') {
     downloadBtn.addEventListener('click', () => {
-      void onDownload();
+      const format = downloadFormat ? downloadFormat.value : '';
+      if (format === 'svg') {
+        const svgEl = content.querySelector('svg');
+        if (svgEl) {
+          const clone = svgEl.cloneNode(true);
+          if (clone instanceof SVGElement) {
+            clone.style.width = '';
+            clone.style.height = '';
+            const serializer = new XMLSerializer();
+            const svgText = serializer.serializeToString(clone);
+            const base = getBaseFilename(sessionFilename);
+            const suffix = classPrefix === 'signals' ? '-sig' : '-tasks';
+            downloadSvgText(`${base}${suffix}.svg`, svgText);
+            return;
+          }
+        }
+      }
+      void onDownload(format);
     });
   }
 

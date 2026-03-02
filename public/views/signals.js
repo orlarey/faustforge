@@ -16,9 +16,10 @@ export function getName() {
  * Purpose: Render the Signals view for the current session.
  * How: Invokes the shared DOT renderer with Signals endpoint, labels, and CSS class prefix.
  */
-export async function render(container, { sha, onError, onClearError, onDownload }) {
+export async function render(container, { sha, sessionFilename, onError, onClearError, onDownload }) {
   await renderDotGraphView(container, {
     sha,
+    sessionFilename,
     dotFile: 'signals.dot',
     notAvailableMessage: 'Signals graph not available',
     title: 'SIGNAL GRAPH',

@@ -80,7 +80,12 @@ export async function render(container, { sha, scrollState, onScrollChange, onDo
                 <option value="200">200%</option>
               </select>
             </div>
-            <button class="primary-btn code-download-btn toolbar-download-right" type="button">Download</button>
+            <div class="download-select-group toolbar-download-right">
+              <button class="download-select-btn code-download-btn" type="button">Download</button>
+              <select class="download-select-value code-download-format" aria-label="DSP download format">
+                <option value="dsp">.dsp</option>
+              </select>
+            </div>
           </div>
         </div>
         <div class="code-editor">
@@ -94,9 +99,11 @@ export async function render(container, { sha, scrollState, onScrollChange, onDo
     const codeContent = container.querySelector('.code-content');
     const zoomSelect = container.querySelector('.code-zoom-select');
     const downloadBtn = container.querySelector('.code-download-btn');
+    const downloadFormat = container.querySelector('.code-download-format');
     if (downloadBtn && typeof onDownload === 'function') {
       downloadBtn.addEventListener('click', () => {
-        void onDownload();
+        const format = downloadFormat ? downloadFormat.value : '';
+        void onDownload(format);
       });
     }
     setupCodeEditorInteractions({

@@ -209,7 +209,12 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
           <span>MIDI</span>
           <select id="midi-input"></select>
         </label>
-        <button id="run-download-btn" class="primary-btn toolbar-download-right" type="button">Download</button>
+        <div class="download-select-group toolbar-download-right">
+          <button id="run-download-btn" class="download-select-btn" type="button">Download</button>
+          <select id="run-download-format" class="download-select-value" aria-label="Run download format">
+            <option value="pwa">pwa (.tar.gz)</option>
+          </select>
+        </div>
       </div>
     </div>
     <div class="run-controls" id="run-controls"></div>
@@ -290,6 +295,7 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
   const modeSelect = runRoot.querySelector('#run-mode');
   const midiInputSelect = runRoot.querySelector('#midi-input');
   const downloadButton = runRoot.querySelector('#run-download-btn');
+  const downloadFormatSelect = runRoot.querySelector('#run-download-format');
   const midiInlineEl = runRoot.querySelector('#run-midi-inline');
   const controlsEl = runRoot.querySelector('#run-controls');
   const scopeCanvas = runRoot.querySelector('#scope-canvas');
@@ -341,7 +347,8 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
   updateRunNote();
   if (downloadButton && typeof onDownload === 'function') {
     downloadButton.addEventListener('click', () => {
-      void onDownload();
+      const format = downloadFormatSelect ? downloadFormatSelect.value : '';
+      void onDownload(format);
     });
   }
 

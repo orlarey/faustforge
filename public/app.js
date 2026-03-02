@@ -735,9 +735,17 @@ async function renderCurrentView(targetContainer = viewContainer) {
       renderSha && state.viewScrollBySha[renderSha]
         ? state.viewScrollBySha[renderSha][view.id]
         : null;
+    const renderSession = renderSha
+      ? state.sessions.find((s) => s.sha1 === renderSha) || null
+      : null;
+    const sessionFilename =
+      renderSession && typeof renderSession.filename === 'string'
+        ? renderSession.filename
+        : '';
     const scrollState = perSession || state.viewScroll[view.id];
     await view.render(renderTarget, {
       sha: renderSha,
+      sessionFilename,
       runState,
       scrollState,
       onError: (message) => {
@@ -818,9 +826,9 @@ async function renderCurrentView(targetContainer = viewContainer) {
           };
         }
       },
-      onDownload: async () => {
+      onDownload: async (format) => {
         try {
-          await downloadCurrentViewArtifact();
+          await downloadCurrentViewArtifact(format);
           hideError();
         } catch (err) {
           const message = `Error: ${err.message}`;
@@ -1378,7 +1386,7 @@ function hideInterface() {
  * Purpose: Download the artifact corresponding to the currently selected view.
  * How: Resolves endpoint and filename from active session/view context and delegates network transfer to `downloadFromUrl`.
  */
-async function downloadCurrentViewArtifact() {
+async function downloadCurrentViewArtifact(format = '') {
   if (state.sessionIndex >= state.sessions.length || state.sessionIndex < 0) return;
   const session = state.sessions[state.sessionIndex];
   if (!session) return;

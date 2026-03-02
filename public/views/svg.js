@@ -68,7 +68,12 @@ export async function render(container, { sha, onDownload }) {
                 </select>
               </div>
             </div>
-            <button class="primary-btn svg-download-btn toolbar-download-right" type="button">Download</button>
+            <div class="download-select-group toolbar-download-right">
+              <button class="download-select-btn svg-download-btn" type="button">Download</button>
+              <select class="download-select-value svg-download-format" aria-label="Diagram download format">
+                <option value="svg">.svg (.tar.gz)</option>
+              </select>
+            </div>
           </div>
         </div>
         <div class="svg-container">
@@ -86,12 +91,14 @@ export async function render(container, { sha, onDownload }) {
     const upBtn = container.querySelector('[data-action="up"]');
     const currentFileLabel = container.querySelector('.svg-current-file');
     const downloadBtn = container.querySelector('.svg-download-btn');
+    const downloadFormat = container.querySelector('.svg-download-format');
     const progressOverlay = container.querySelector('.svg-progress');
     let currentZoom = 100;
     let zoomMode = 'manual';
     if (downloadBtn && typeof onDownload === 'function') {
       downloadBtn.addEventListener('click', () => {
-        void onDownload();
+        const format = downloadFormat ? downloadFormat.value : '';
+        void onDownload(format);
       });
     }
 

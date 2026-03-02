@@ -44,6 +44,10 @@ function normalizeCppFlags(input: string): string {
 }
 
 /**
+ * Purpose: Convert DOT graph source into a PDF document.
+ * How: Streams DOT text to `dot -Tpdf`, captures PDF bytes from stdout, and enforces a short timeout.
+ */
+/**
  * Purpose: Register compile and download endpoints on the API router.
  * How: Mounts C++/WASM/PWA compilation handlers and all artifact download handlers using shared helpers from api.ts.
  */
