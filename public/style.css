@@ -417,6 +417,10 @@ main {
   box-shadow: var(--ui-press-shadow);
 }
 
+.toolbar-download-right {
+  margin-left: auto;
+}
+
 #view-select {
   min-width: 6.8rem;
 }
@@ -1915,7 +1919,7 @@ footer > * {
 
 .run-header {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: var(--ui-space-2);
   padding: var(--ui-space-2) var(--ui-space-3);

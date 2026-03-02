@@ -16,7 +16,7 @@ export function getName() {
  * Purpose: Render the Signals view for the current session.
  * How: Invokes the shared DOT renderer with Signals endpoint, labels, and CSS class prefix.
  */
-export async function render(container, { sha, onError, onClearError }) {
+export async function render(container, { sha, onError, onClearError, onDownload }) {
   await renderDotGraphView(container, {
     sha,
     dotFile: 'signals.dot',
@@ -25,7 +25,8 @@ export async function render(container, { sha, onError, onClearError }) {
     classPrefix: 'signals',
     zoomAriaLabel: 'Signal graph zoom',
     onError,
-    onClearError
+    onClearError,
+    onDownload
   });
 }
 

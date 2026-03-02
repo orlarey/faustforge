@@ -168,7 +168,7 @@ export function getName() {
  * Purpose: Implement `render` in the Run view.
  * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
-export async function render(container, { sha, runState, onRunStateChange }) {
+export async function render(container, { sha, runState, onRunStateChange, onDownload }) {
   // Live auto-refresh can re-render Run without a view switch.
   // Ensure no timer/listener/audio instance from a previous Run render survives.
   dispose();
@@ -209,6 +209,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
           <span>MIDI</span>
           <select id="midi-input"></select>
         </label>
+        <button id="run-download-btn" class="primary-btn toolbar-download-right" type="button">Download</button>
       </div>
     </div>
     <div class="run-controls" id="run-controls"></div>
@@ -288,6 +289,7 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   const audioToggleValue = runRoot.querySelector('#run-audio-toggle-value');
   const modeSelect = runRoot.querySelector('#run-mode');
   const midiInputSelect = runRoot.querySelector('#midi-input');
+  const downloadButton = runRoot.querySelector('#run-download-btn');
   const midiInlineEl = runRoot.querySelector('#run-midi-inline');
   const controlsEl = runRoot.querySelector('#run-controls');
   const scopeCanvas = runRoot.querySelector('#scope-canvas');
@@ -337,6 +339,11 @@ export async function render(container, { sha, runState, onRunStateChange }) {
   }
 
   updateRunNote();
+  if (downloadButton && typeof onDownload === 'function') {
+    downloadButton.addEventListener('click', () => {
+      void onDownload();
+    });
+  }
 
   scopeState = createScopeState(scopeCanvas);
   drawScopePlaceholder(scopeState);

@@ -213,7 +213,7 @@ function resolveVisibleRenderContainer(container) {
  * Purpose: Render the C++ code pane for one session.
  * How: Builds toolbar/editor UI, manages presets/help/actions, and maintains zoom/scroll synchronization.
  */
-export async function render(container, { sha, scrollState, onScrollChange }) {
+export async function render(container, { sha, scrollState, onScrollChange, onDownload }) {
   try {
     let presets = loadCppPresets();
     const hasLocalFlags = Object.prototype.hasOwnProperty.call(cppFlagsBySha, sha);
@@ -276,6 +276,7 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
                 <option value="200">200%</option>
               </select>
             </div>
+            <button class="primary-btn code-download-btn toolbar-download-right" type="button">Download</button>
           </div>
         </div>
         <div class="code-flags-status"></div>
@@ -299,10 +300,16 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
     const presetToggle = container.querySelector('.code-preset-toggle');
     const presetMenu = container.querySelector('.code-preset-menu');
     const flagsHelp = container.querySelector('.code-flags-help');
+    const downloadBtn = container.querySelector('.code-download-btn');
     const flagsStatus = container.querySelector('.code-flags-status');
     const helpPanel = container.querySelector('.code-help-panel');
     const helpContent = container.querySelector('.code-help-content');
     const helpClose = container.querySelector('.code-help-close');
+    if (downloadBtn && typeof onDownload === 'function') {
+      downloadBtn.addEventListener('click', () => {
+        void onDownload();
+      });
+    }
 
     const zoomSelect = container.querySelector('.code-zoom-select');
     const { getTopLine } = setupCodeEditorInteractions({

@@ -52,7 +52,7 @@ function highlightFaust(code) {
  * Purpose: Render the DSP code pane for one session.
  * How: Loads source code, injects highlighted HTML, and maintains zoom/scroll synchronization state.
  */
-export async function render(container, { sha, scrollState, onScrollChange }) {
+export async function render(container, { sha, scrollState, onScrollChange, onDownload }) {
   try {
     const response = await fetch(`/api/${sha}/user_code.dsp`);
 
@@ -80,6 +80,7 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
                 <option value="200">200%</option>
               </select>
             </div>
+            <button class="primary-btn code-download-btn toolbar-download-right" type="button">Download</button>
           </div>
         </div>
         <div class="code-editor">
@@ -92,6 +93,12 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
     const lineNumbers = container.querySelector('.line-numbers');
     const codeContent = container.querySelector('.code-content');
     const zoomSelect = container.querySelector('.code-zoom-select');
+    const downloadBtn = container.querySelector('.code-download-btn');
+    if (downloadBtn && typeof onDownload === 'function') {
+      downloadBtn.addEventListener('click', () => {
+        void onDownload();
+      });
+    }
     setupCodeEditorInteractions({
       lineNumbersEl: lineNumbers,
       codeContentEl: codeContent,

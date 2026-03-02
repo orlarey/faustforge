@@ -16,7 +16,7 @@ export function getName() {
  * Purpose: Render the Tasks view for the current session.
  * How: Invokes the shared DOT renderer with Tasks endpoint, labels, and CSS class prefix.
  */
-export async function render(container, { sha, onError, onClearError }) {
+export async function render(container, { sha, onError, onClearError, onDownload }) {
   await renderDotGraphView(container, {
     sha,
     dotFile: 'tasks.dot',
@@ -25,7 +25,8 @@ export async function render(container, { sha, onError, onClearError }) {
     classPrefix: 'tasks',
     zoomAriaLabel: 'Task graph zoom',
     onError,
-    onClearError
+    onClearError,
+    onDownload
   });
 }
 

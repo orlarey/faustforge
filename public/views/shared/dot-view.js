@@ -143,7 +143,8 @@ export async function renderDotGraphView(container, options) {
     classPrefix,
     zoomAriaLabel,
     onError,
-    onClearError
+    onClearError,
+    onDownload
   } = options || {};
 
   let dot = '';
@@ -179,6 +180,7 @@ export async function renderDotGraphView(container, options) {
             </select>
           </div>
           <button class="${classPrefix}-toggle-split" title="Show/hide split graph and DOT source">Split view</button>
+          <button class="primary-btn ${classPrefix}-download-btn toolbar-download-right" type="button">Download</button>
         </div>
       </div>
       <div class="${classPrefix}-main">
@@ -195,6 +197,7 @@ export async function renderDotGraphView(container, options) {
   const dotPre = container.querySelector(`.${classPrefix}-dot`);
   const splitter = container.querySelector(`.${classPrefix}-splitter`);
   const zoomSelect = container.querySelector(`.${classPrefix}-zoom-select`);
+  const downloadBtn = container.querySelector(`.${classPrefix}-download-btn`);
   const toggleDotBtn = container.querySelector(`.${classPrefix}-toggle-split`);
   const containerEl = container.querySelector(`.${classPrefix}-container`);
   const mainEl = container.querySelector(`.${classPrefix}-main`);
@@ -238,6 +241,11 @@ export async function renderDotGraphView(container, options) {
   toggleDotBtn.addEventListener('click', () => {
     setDotVisible(dotPre.classList.contains('hidden'));
   });
+  if (downloadBtn && typeof onDownload === 'function') {
+    downloadBtn.addEventListener('click', () => {
+      void onDownload();
+    });
+  }
 
   splitter.addEventListener('mousedown', (event) => {
     event.preventDefault();

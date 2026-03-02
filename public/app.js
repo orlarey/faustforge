@@ -19,7 +19,6 @@ import { SHOWCASE_CODE, SHOWCASE_FILENAME, state } from './app/state.js';
 
 // Core DOM elements.
 const fileInput = document.getElementById('file-input');
-const downloadBtn = document.getElementById('download-btn');
 const errorBanner = document.getElementById('error-banner');
 const viewContainer = document.getElementById('view-container');
 const sessionLabel = document.getElementById('session-label');
@@ -819,6 +818,16 @@ async function renderCurrentView(targetContainer = viewContainer) {
           };
         }
       },
+      onDownload: async () => {
+        try {
+          await downloadCurrentViewArtifact();
+          hideError();
+        } catch (err) {
+          const message = `Error: ${err.message}`;
+          showError(message);
+          showErrorOverlay(message);
+        }
+      },
       onScrollChange: (line) => {
         if (!scrollState || typeof line !== 'number') return;
         if (state.currentSha !== renderSha) return;
@@ -904,7 +913,6 @@ function updateSessionNavigation() {
     if (deleteSessionBtn) deleteSessionBtn.classList.add('hidden');
     if (refreshSessionBtn) refreshSessionBtn.classList.add('hidden');
     if (editSessionBtn) editSessionBtn.classList.add('hidden');
-    if (downloadBtn) downloadBtn.classList.add('hidden');
   } else {
     // Active session.
     const session = state.sessions[state.sessionIndex];
@@ -926,7 +934,6 @@ function updateSessionNavigation() {
         editSessionBtn.classList.remove('hidden');
       }
     }
-    if (downloadBtn) downloadBtn.classList.remove('hidden');
   }
   generateViewSelect();
 }
@@ -1367,44 +1374,40 @@ function hideInterface() {
   scheduleTooltipApply(viewContainer);
 }
 
-// Event listeners
-if (downloadBtn) {
-  downloadBtn.addEventListener('click', async () => {
-    if (state.sessionIndex >= state.sessions.length || state.sessionIndex < 0) return;
-    const session = state.sessions[state.sessionIndex];
-    if (!session) return;
+/**
+ * Purpose: Download the artifact corresponding to the currently selected view.
+ * How: Resolves endpoint and filename from active session/view context and delegates network transfer to `downloadFromUrl`.
+ */
+async function downloadCurrentViewArtifact() {
+  if (state.sessionIndex >= state.sessions.length || state.sessionIndex < 0) return;
+  const session = state.sessions[state.sessionIndex];
+  if (!session) return;
 
-    const base = session.filename.replace(/\.dsp$/i, '') || 'session';
-    let url = `/api/${session.sha1}/download/dsp`;
-    let filename = `${base}.dsp`;
+  const base = session.filename.replace(/\.dsp$/i, '') || 'session';
+  let url = `/api/${session.sha1}/download/dsp`;
+  let filename = `${base}.dsp`;
 
-    if (state.currentView === 'cpp') {
-      url = `/api/${session.sha1}/download/cpp`;
-      filename = `${base}.cpp`;
-    } else if (state.currentView === 'signals') {
-      url = `/api/${session.sha1}/download/signals`;
-      filename = `${base}-sig.dot`;
-    } else if (state.currentView === 'tasks') {
-      url = `/api/${session.sha1}/download/tasks`;
-      filename = `${base}.dsp.dot`;
-    } else if (state.currentView === 'svg') {
-      url = `/api/${session.sha1}/download/svg`;
-      filename = `${base}-svg.tar.gz`;
-    } else if (state.currentView === 'run') {
-      url = `/api/${session.sha1}/download/pwa`;
-      filename = `${base}-pwa.tar.gz`;
-    }
+  if (state.currentView === 'cpp') {
+    url = `/api/${session.sha1}/download/cpp`;
+    filename = `${base}.cpp`;
+  } else if (state.currentView === 'signals') {
+    url = `/api/${session.sha1}/download/signals`;
+    filename = `${base}-sig.dot`;
+  } else if (state.currentView === 'tasks') {
+    url = `/api/${session.sha1}/download/tasks`;
+    filename = `${base}.dsp.dot`;
+  } else if (state.currentView === 'svg') {
+    url = `/api/${session.sha1}/download/svg`;
+    filename = `${base}-svg.tar.gz`;
+  } else if (state.currentView === 'run') {
+    url = `/api/${session.sha1}/download/pwa`;
+    filename = `${base}-pwa.tar.gz`;
+  }
 
-    try {
-      await downloadFromUrl(url, filename, 'Download failed');
-    } catch (err) {
-      const message = `Error: ${err.message}`;
-      showError(message);
-      showErrorOverlay(message);
-    }
-  });
+  await downloadFromUrl(url, filename, 'Download failed');
 }
 
+// Event listeners
 if (archiveBtn) {
   archiveBtn.addEventListener('click', async () => {
     try {
