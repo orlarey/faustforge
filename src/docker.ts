@@ -429,13 +429,14 @@ export function compileFaustWebapp(
     }
 
     const sourceDir = path.join(sessionPath, 'sourcecode');
-    const args = [filename, '../webapp', '-pwa'];
+    const args = ['--no-install', 'faust2wasm-ts', filename, '../webapp', '-pwa'];
 
     let stdout = '';
     let stderr = '';
     let killed = false;
 
-    const proc = spawn('faust2wasm-ts', args, { cwd: sourceDir });
+    // Resolve through npx to avoid relying on a globally installed faust2wasm-ts binary.
+    const proc = spawn('npx', args, { cwd: sourceDir });
 
     const timer = setTimeout(() => {
       killed = true;
@@ -465,7 +466,7 @@ export function compileFaustWebapp(
 
     proc.on('error', (err) => {
       clearTimeout(timer);
-      resolve({ success: false, errors: `faust2wasm-ts error: ${err.message}` });
+      resolve({ success: false, errors: `npx faust2wasm-ts error: ${err.message}` });
     });
   });
 }

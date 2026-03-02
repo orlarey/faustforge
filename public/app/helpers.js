@@ -103,8 +103,18 @@ export async function copyToClipboard(text) {
 export async function downloadFromUrl(url, filename, fallbackError = 'Download failed') {
   const response = await fetch(url);
   if (!response.ok) {
-    const result = await response.json().catch(() => ({}));
-    throw new Error(result.error || fallbackError);
+    const text = await response.text().catch(() => '');
+    let result = {};
+    try {
+      result = text ? JSON.parse(text) : {};
+    } catch {
+      // ignore JSON parse errors and fallback to raw text message
+    }
+    const serverError =
+      (result && typeof result.error === 'string' && result.error.trim())
+      || (text && text.trim())
+      || '';
+    throw new Error(serverError || `${fallbackError} (HTTP ${response.status})`);
   }
   const blob = await response.blob();
   const link = document.createElement('a');

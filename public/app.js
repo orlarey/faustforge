@@ -38,6 +38,9 @@ const archiveBtn = document.getElementById('archive-btn');
 const audioGate = document.getElementById('audio-gate');
 const audioGateButton = document.getElementById('audio-gate-button');
 const audioGateStatus = document.getElementById('audio-gate-status');
+const errorOverlay = document.getElementById('error-overlay');
+const errorOverlayMessage = document.getElementById('error-overlay-message');
+const errorOverlayClose = document.getElementById('error-overlay-close');
 let lastStateTs = 0;
 let pasteSink = null;
 let localViewStickyUntil = 0;
@@ -1300,6 +1303,26 @@ function hideError() {
   errorBanner.classList.add('hidden');
   errorBanner.textContent = '';
 }
+
+/**
+ * Purpose: Keep critical errors visible when banner messages are too transient.
+ * How: Displays a modal overlay with explicit close action and persistent message text.
+ */
+function showErrorOverlay(message) {
+  if (!errorOverlay || !errorOverlayMessage) return;
+  errorOverlayMessage.textContent = message || 'Unknown error';
+  errorOverlay.classList.remove('hidden');
+}
+
+/**
+ * Purpose: Dismiss the critical error overlay.
+ * How: Hides the overlay and clears previous message content.
+ */
+function hideErrorOverlay() {
+  if (!errorOverlay || !errorOverlayMessage) return;
+  errorOverlay.classList.add('hidden');
+  errorOverlayMessage.textContent = '';
+}
 /**
  * Purpose: Handle the `showInterface` step in the application flow.
  * How: Executes the show interface logic by reading/updating UI state, session state, and backend synchronization hooks as needed.
@@ -1372,7 +1395,9 @@ if (downloadBtn) {
     try {
       await downloadFromUrl(url, filename, 'Download failed');
     } catch (err) {
-      showError(`Error: ${err.message}`);
+      const message = `Error: ${err.message}`;
+      showError(message);
+      showErrorOverlay(message);
     }
   });
 }
@@ -1693,6 +1718,20 @@ if (audioGateButton) {
       showError(`Audio unlock required: ${message}`);
     } finally {
       audioGateButton.disabled = false;
+    }
+  });
+}
+
+if (errorOverlayClose) {
+  errorOverlayClose.addEventListener('click', () => {
+    hideErrorOverlay();
+  });
+}
+
+if (errorOverlay) {
+  errorOverlay.addEventListener('click', (event) => {
+    if (event.target === errorOverlay) {
+      hideErrorOverlay();
     }
   });
 }

@@ -274,8 +274,10 @@ export function registerCompileDownloadRoutes({
     const session = requireSession(sha, res);
     if (!session) return;
 
+    const existingWebappIndex = path.join(session.path, 'webapp', 'index.html');
+    const hasExistingWebapp = fs.existsSync(existingWebappIndex);
     const compile = await compileFaustWebapp(session.path, session.filename);
-    if (!compile.success) {
+    if (!compile.success && !hasExistingWebapp) {
       res.status(500).json({ error: compile.errors || 'PWA generation failed' });
       return;
     }
