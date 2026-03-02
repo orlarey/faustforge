@@ -990,12 +990,15 @@ async function loadSessionByIndex(index) {
  * Purpose: Implement `loadEmptySession` in the app flow.
  * How: Reads and updates UI, session, and backend sync state for this step.
  */
-async function loadEmptySession() {
+async function loadEmptySession(options = {}) {
+  const resetView = !!(options && options.resetView === true);
   cancelViewTransition();
   captureScrollLine();
   state.currentSha = null;
   state.sessionIndex = state.sessions.length;
-  state.currentView = 'dsp';
+  if (resetView || !state.views.some((v) => v.id === state.currentView)) {
+    state.currentView = 'dsp';
+  }
 
   updateSessionNavigation();
   hideError();
@@ -1698,7 +1701,7 @@ if (audioGateButton) {
   audioGateButton.addEventListener('click', async () => {
     stopShowcasePreview();
     if (state.audioUnlocked) {
-      await loadEmptySession();
+      await loadEmptySession({ resetView: true });
       hideAudioGate();
       return;
     }
@@ -1709,7 +1712,7 @@ if (audioGateButton) {
       state.audioUnlocked = true;
       state.runGlobal.audioRunning = true;
       await syncState({ audioUnlocked: true });
-      await loadEmptySession();
+      await loadEmptySession({ resetView: true });
       hideAudioGate();
       hideError();
     } catch (err) {
