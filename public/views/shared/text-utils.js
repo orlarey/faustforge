@@ -25,3 +25,44 @@ export function generateLineNumbers(lineCount) {
   }
   return lines.join('\n');
 }
+
+/**
+ * Purpose: Apply placeholder-safe syntax highlighting rules on plain text.
+ * How: Escapes HTML once, runs ordered regex replacement rules through protected placeholders, then restores highlighted fragments.
+ */
+export function highlightWithRules(text, rules, tokenPrefix = '__TOKEN_') {
+  const tokens = [];
+  let tokenId = 0;
+
+  /**
+   * Purpose: Protect highlighted fragments from later regex passes.
+   * How: Stores highlighted HTML in a token table and returns a unique marker placeholder.
+   */
+  function placeholder(html) {
+    const id = `${tokenPrefix}${tokenId++}__`;
+    tokens.push({ id, html });
+    return id;
+  }
+
+  let result = escapeHtml(String(text || ''));
+  for (const rule of rules || []) {
+    if (!rule || !rule.pattern) continue;
+    if (rule.replacer) {
+      result = result.replace(rule.pattern, (match, ...rest) => {
+        const html = rule.replacer(match, ...rest);
+        return placeholder(html);
+      });
+      continue;
+    }
+    if (rule.className) {
+      result = result.replace(rule.pattern, (match) => {
+        return placeholder(`<span class="${rule.className}">${match}</span>`);
+      });
+    }
+  }
+
+  for (const token of tokens) {
+    result = result.replace(token.id, token.html);
+  }
+  return result;
+}

@@ -36,6 +36,14 @@ function osTmpFallback(): string {
 }
 
 /**
+ * Purpose: Normalize C++ compile flags before persistence and comparisons.
+ * How: Trims input and collapses repeated whitespace to single spaces.
+ */
+function normalizeCppFlags(input: string): string {
+  return String(input || '').trim().replace(/\s+/g, ' ');
+}
+
+/**
  * Purpose: Register compile and download endpoints on the API router.
  * How: Mounts C++/WASM/PWA compilation handlers and all artifact download handlers using shared helpers from api.ts.
  */
@@ -62,13 +70,14 @@ export function registerCompileDownloadRoutes({
       res.status(400).json({ error: 'Invalid flags' });
       return;
     }
-    const flags = typeof rawFlags === 'string' ? rawFlags : '';
+    const flags = normalizeCppFlags(typeof rawFlags === 'string' ? rawFlags : '');
     try {
       const result = await compileFaustCpp(session.path, session.filename, flags);
       if (!result.success) {
         res.status(400).json({ success: false, error: result.errors || 'C++ compilation failed' });
         return;
       }
+      sessionManager.setCppFlags(session.sha1, flags);
       markUsed(session.sha1, 3);
       res.json({ success: true, flags, errors: result.errors || '' });
     } catch (err) {

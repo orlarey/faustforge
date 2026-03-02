@@ -13,6 +13,7 @@ export interface SessionMeta {
   compilation_time: number;
   last_used_time?: number;
   usage_score?: number;
+  cpp_flags?: string;
 }
 
 export interface Session {
@@ -134,6 +135,47 @@ export class SessionManager {
   }
 
   /**
+   * Purpose: Normalize one metadata object into a stable session summary shape.
+   * How: Applies fallback values for optional time/score fields and copies shared metadata fields.
+   */
+  private toSessionSummary(sessionId: string, metadata: SessionMeta): SessionSummary {
+    return {
+      sha1:
+        typeof metadata.sha1 === 'string' && metadata.sha1
+          ? metadata.sha1
+          : sessionId,
+      kind: metadata.kind === 'live' ? 'live' : 'static',
+      live_draft: metadata.live_draft === true,
+      filename: metadata.filename,
+      compilation_time: metadata.compilation_time,
+      last_used_time:
+        typeof metadata.last_used_time === 'number' && Number.isFinite(metadata.last_used_time)
+          ? metadata.last_used_time
+          : metadata.compilation_time,
+      usage_score:
+        typeof metadata.usage_score === 'number' && Number.isFinite(metadata.usage_score)
+          ? metadata.usage_score
+          : 0,
+      source_path: metadata.source_path,
+      source_mtime_ms: metadata.source_mtime_ms,
+      content_sha1: metadata.content_sha1
+    };
+  }
+
+  /**
+   * Purpose: Apply an optional result limit consistently across sorted summary lists.
+   * How: Chooses head or tail slice semantics based on list intent and returns full list when limit is absent.
+   */
+  private applySummaryLimit(
+    summaries: SessionSummary[],
+    limit: number | undefined,
+    mode: 'head' | 'tail'
+  ): SessionSummary[] {
+    if (!limit || limit <= 0) return summaries;
+    return mode === 'head' ? summaries.slice(0, limit) : summaries.slice(-limit);
+  }
+
+  /**
    * Purpose: Reload current session IDs and ordering information from disk.
    * How: Scans session folders, parses metadata summaries, then rebuilds creation and fallback LRU order arrays.
    */
@@ -152,21 +194,8 @@ export class SessionManager {
             if (!this.isValidSessionId(id)) {
               continue;
             }
-            summaries.push({
-              sha1: id,
-              kind,
-              live_draft: metadata.live_draft === true,
-              filename: metadata.filename,
-              compilation_time: metadata.compilation_time,
-              last_used_time:
-                typeof metadata.last_used_time === 'number' && Number.isFinite(metadata.last_used_time)
-                  ? metadata.last_used_time
-                  : metadata.compilation_time,
-              usage_score:
-                typeof metadata.usage_score === 'number' && Number.isFinite(metadata.usage_score)
-                  ? metadata.usage_score
-                  : 0
-            });
+            const summary = this.toSessionSummary(id, metadata);
+            summaries.push({ ...summary, kind });
           } catch {
             // Ignore malformed sessions.
           }
@@ -471,30 +500,12 @@ export class SessionManager {
         const metadata = this.readMetadata(metadataPath);
         if (!metadata) continue;
         if (metadata.kind !== 'live') continue;
-        out.push({
-          sha1: id,
-          kind: 'live',
-          live_draft: metadata.live_draft === true,
-          filename: metadata.filename,
-          compilation_time: metadata.compilation_time,
-          last_used_time:
-            typeof metadata.last_used_time === 'number' && Number.isFinite(metadata.last_used_time)
-              ? metadata.last_used_time
-              : metadata.compilation_time,
-          usage_score:
-            typeof metadata.usage_score === 'number' && Number.isFinite(metadata.usage_score)
-              ? metadata.usage_score
-              : 0,
-          source_path: metadata.source_path,
-          source_mtime_ms: metadata.source_mtime_ms,
-          content_sha1: metadata.content_sha1
-        });
+        out.push(this.toSessionSummary(id, metadata));
       } catch {
         // ignore invalid entries
       }
     }
-    if (limit && limit > 0) return out.slice(-limit);
-    return out;
+    return this.applySummaryLimit(out, limit, 'tail');
   }
 
   /**
@@ -632,26 +643,30 @@ export class SessionManager {
       const metadataPath = path.join(this.sessionsDir, sha1, 'metadata.json');
       const metadata = this.readMetadata(metadataPath);
       if (!metadata) continue;
-      summaries.push({
-        sha1: metadata.sha1,
-        kind: metadata.kind === 'live' ? 'live' : 'static',
-        live_draft: metadata.live_draft === true,
-        filename: metadata.filename,
-        compilation_time: metadata.compilation_time,
-        last_used_time:
-          typeof metadata.last_used_time === 'number' && Number.isFinite(metadata.last_used_time)
-            ? metadata.last_used_time
-            : metadata.compilation_time,
-        usage_score:
-          typeof metadata.usage_score === 'number' && Number.isFinite(metadata.usage_score)
-            ? metadata.usage_score
-            : 0,
-        source_path: metadata.source_path,
-        source_mtime_ms: metadata.source_mtime_ms,
-        content_sha1: metadata.content_sha1
-      });
+      summaries.push(this.toSessionSummary(sha1, metadata));
     }
     return summaries;
+  }
+
+  /**
+   * Purpose: Build a session listing from creation-order summaries with optional sorting and limiting.
+   * How: Refreshes persisted state, derives normalized summaries, applies comparator when provided, then applies head/tail limit mode.
+   */
+  private listSessions(options?: {
+    limit?: number;
+    limitMode?: 'head' | 'tail';
+    comparator?: (a: SessionSummary, b: SessionSummary) => number;
+  }): SessionSummary[] {
+    this.refreshSessions();
+    const summaries = this.buildSessionSummariesByCreationOrder();
+    if (options?.comparator) {
+      summaries.sort(options.comparator);
+    }
+    return this.applySummaryLimit(
+      summaries,
+      options?.limit,
+      options?.limitMode ?? 'tail'
+    );
   }
 
   /**
@@ -659,12 +674,7 @@ export class SessionManager {
    * How: Refreshes summaries and returns oldest-to-newest ordering with optional tail limit.
    */
   listSessionsByCreation(limit?: number): SessionSummary[] {
-    this.refreshSessions();
-    const summaries = this.buildSessionSummariesByCreationOrder();
-    if (limit && limit > 0) {
-      return summaries.slice(-limit);
-    }
-    return summaries;
+    return this.listSessions({ limit, limitMode: 'tail' });
   }
 
   /**
@@ -672,17 +682,16 @@ export class SessionManager {
    * How: Sorts by `last_used_time` descending with compilation time fallback tie-breakers.
    */
   listSessionsByLastUsed(limit?: number): SessionSummary[] {
-    const sessions = this.listSessionsByCreation();
-    sessions.sort((a, b) => {
-      const aLast = typeof a.last_used_time === 'number' ? a.last_used_time : a.compilation_time;
-      const bLast = typeof b.last_used_time === 'number' ? b.last_used_time : b.compilation_time;
-      if (aLast !== bLast) return bLast - aLast;
-      return b.compilation_time - a.compilation_time;
+    return this.listSessions({
+      limit,
+      limitMode: 'head',
+      comparator: (a, b) => {
+        const aLast = typeof a.last_used_time === 'number' ? a.last_used_time : a.compilation_time;
+        const bLast = typeof b.last_used_time === 'number' ? b.last_used_time : b.compilation_time;
+        if (aLast !== bLast) return bLast - aLast;
+        return b.compilation_time - a.compilation_time;
+      }
     });
-    if (limit && limit > 0) {
-      return sessions.slice(0, limit);
-    }
-    return sessions;
   }
 
   /**
@@ -690,20 +699,19 @@ export class SessionManager {
    * How: Sorts by score descending, then by last-used timestamp, then by compilation time.
    */
   listSessionsByUsage(limit?: number): SessionSummary[] {
-    const sessions = this.listSessionsByCreation();
-    sessions.sort((a, b) => {
-      const aScore = typeof a.usage_score === 'number' ? a.usage_score : 0;
-      const bScore = typeof b.usage_score === 'number' ? b.usage_score : 0;
-      if (aScore !== bScore) return bScore - aScore;
-      const aLast = typeof a.last_used_time === 'number' ? a.last_used_time : a.compilation_time;
-      const bLast = typeof b.last_used_time === 'number' ? b.last_used_time : b.compilation_time;
-      if (aLast !== bLast) return bLast - aLast;
-      return b.compilation_time - a.compilation_time;
+    return this.listSessions({
+      limit,
+      limitMode: 'head',
+      comparator: (a, b) => {
+        const aScore = typeof a.usage_score === 'number' ? a.usage_score : 0;
+        const bScore = typeof b.usage_score === 'number' ? b.usage_score : 0;
+        if (aScore !== bScore) return bScore - aScore;
+        const aLast = typeof a.last_used_time === 'number' ? a.last_used_time : a.compilation_time;
+        const bLast = typeof b.last_used_time === 'number' ? b.last_used_time : b.compilation_time;
+        if (aLast !== bLast) return bLast - aLast;
+        return b.compilation_time - a.compilation_time;
+      }
     });
-    if (limit && limit > 0) {
-      return sessions.slice(0, limit);
-    }
-    return sessions;
   }
 
   /**
@@ -755,5 +763,23 @@ export class SessionManager {
       this.creationOrder.splice(creationIndex, 1);
     }
     return true;
+  }
+
+  /**
+   * Purpose: Persist the last successful C++ compile flags for one session.
+   * How: Reads session metadata, updates `cpp_flags`, and writes metadata back to disk.
+   */
+  setCppFlags(sha1: string, flags: string): boolean {
+    if (!this.exists(sha1)) return false;
+    const metadataPath = path.join(this.sessionsDir, sha1, 'metadata.json');
+    try {
+      const metadata = this.readMetadata(metadataPath);
+      if (!metadata) return false;
+      metadata.cpp_flags = String(flags || '');
+      fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

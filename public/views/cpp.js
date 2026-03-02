@@ -2,7 +2,7 @@
  * Purpose: Define the generated C++ source view.
  * How: Fetches compiled C++ output, highlights syntax, and offers flags presets/help with scroll persistence.
  */
-import { escapeHtml, generateLineNumbers } from './shared/text-utils.js';
+import { escapeHtml, generateLineNumbers, highlightWithRules } from './shared/text-utils.js';
 import { setupCodeEditorInteractions } from './shared/code-editor-view.js';
 
 /**
@@ -30,72 +30,23 @@ const CPP_KEYWORDS = [
 
 /**
  * Purpose: Apply lightweight C++ syntax highlighting on source text.
- * How: Escapes HTML, replaces token categories with placeholders, then restores styled HTML spans.
+ * How: Builds ordered C++ highlight rules and applies them through the shared placeholder-safe highlighter.
  */
 function highlightCpp(code) {
-  const tokens = [];
-  let tokenId = 0;
-
-  /**
-   * Purpose: Protect highlighted fragments from later regex passes.
-   * How: Stores fragment HTML in a token table and returns a unique placeholder marker.
-   */
-  function placeholder(html) {
-    const id = `__TOKEN_${tokenId++}__`;
-    tokens.push({ id, html });
-    return id;
-  }
-
-  // Escape HTML first.
-  let result = escapeHtml(code);
-
-  // 1. Line comments (protect first).
-  result = result.replace(/(\/\/[^\n]*)/g, (match) => {
-    return placeholder(`<span class="cpp-comment">${match}</span>`);
+  const rules = [];
+  rules.push({ pattern: /(\/\/[^\n]*)/g, className: 'cpp-comment' });
+  rules.push({ pattern: /(\/\*[\s\S]*?\*\/)/g, className: 'cpp-comment' });
+  rules.push({ pattern: /(#\s*\w+[^\n]*)/g, className: 'cpp-preprocessor' });
+  rules.push({ pattern: /("(?:[^"\\]|\\.)*")/g, className: 'cpp-string' });
+  rules.push({ pattern: /('(?:[^'\\]|\\.)')/g, className: 'cpp-string' });
+  rules.push({
+    pattern: /\b(0x[0-9a-fA-F]+|\d+\.?\d*(?:e[+-]?\d+)?[fFlL]?)\b/g,
+    className: 'cpp-number'
   });
-
-  // 2. Block comments.
-  result = result.replace(/(\/\*[\s\S]*?\*\/)/g, (match) => {
-    return placeholder(`<span class="cpp-comment">${match}</span>`);
-  });
-
-  // 3. Preprocessor directives.
-  result = result.replace(/(#\s*\w+[^\n]*)/g, (match) => {
-    return placeholder(`<span class="cpp-preprocessor">${match}</span>`);
-  });
-
-  // 4. String literals.
-  result = result.replace(/("(?:[^"\\]|\\.)*")/g, (match) => {
-    return placeholder(`<span class="cpp-string">${match}</span>`);
-  });
-
-  // 5. Character literals.
-  result = result.replace(/('(?:[^'\\]|\\.)')/g, (match) => {
-    return placeholder(`<span class="cpp-string">${match}</span>`);
-  });
-
-  // 6. Numeric literals.
-  result = result.replace(/\b(0x[0-9a-fA-F]+|\d+\.?\d*(?:e[+-]?\d+)?[fFlL]?)\b/g, (match) => {
-    return placeholder(`<span class="cpp-number">${match}</span>`);
-  });
-
-  // 7. Keywords.
   const keywordPattern = new RegExp(`\\b(${CPP_KEYWORDS.join('|')})\\b`, 'g');
-  result = result.replace(keywordPattern, (match) => {
-    return placeholder(`<span class="cpp-keyword">${match}</span>`);
-  });
-
-  // 8. User-like type names starting with uppercase.
-  result = result.replace(/\b([A-Z][a-zA-Z0-9_]*)\b/g, (match) => {
-    return placeholder(`<span class="cpp-type">${match}</span>`);
-  });
-
-  // Restore all placeholder tokens.
-  for (const token of tokens) {
-    result = result.replace(token.id, token.html);
-  }
-
-  return result;
+  rules.push({ pattern: keywordPattern, className: 'cpp-keyword' });
+  rules.push({ pattern: /\b([A-Z][a-zA-Z0-9_]*)\b/g, className: 'cpp-type' });
+  return highlightWithRules(code, rules, '__CPP_TOKEN_');
 }
 
 const CPP_PRESETS_STORAGE_KEY = 'faustforge.cpp.presets.v1';
@@ -187,6 +138,17 @@ async function fetchCppCode(sha) {
 }
 
 /**
+ * Purpose: Load persisted C++ flags associated with one session.
+ * How: Reads `/metadata.json`, extracts `cpp_flags`, and falls back to empty flags when unavailable.
+ */
+async function fetchPersistedCppFlags(sha) {
+  const response = await fetch(`/api/${sha}/metadata.json`);
+  if (!response.ok) return '';
+  const data = await response.json().catch(() => ({}));
+  return normalizeFlags(data?.cpp_flags || '');
+}
+
+/**
  * Purpose: Ask backend to recompile C++ with custom Faust flags.
  * How: Sends flags to `/compile/cpp` and raises backend errors as exceptions.
  */
@@ -254,7 +216,11 @@ function resolveVisibleRenderContainer(container) {
 export async function render(container, { sha, scrollState, onScrollChange }) {
   try {
     let presets = loadCppPresets();
-    const appliedFlags = normalizeFlags(cppFlagsBySha[sha] || '');
+    const hasLocalFlags = Object.prototype.hasOwnProperty.call(cppFlagsBySha, sha);
+    const persistedFlags = hasLocalFlags ? '' : await fetchPersistedCppFlags(sha);
+    const appliedFlags = normalizeFlags(
+      hasLocalFlags ? cppFlagsBySha[sha] || '' : persistedFlags
+    );
     cppFlagsBySha[sha] = appliedFlags;
     const cpp = await fetchCppCode(sha);
     if (!cpp.ok) {
@@ -409,9 +375,40 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
     };
 
     if (presetToggle && presetMenu) {
+      let docListenersInstalled = false;
+      const onDocClick = (event) => {
+        if (container.contains(event.target)) return;
+        closePresetMenu();
+      };
+      const onDocKeyDown = (event) => {
+        if (event.key !== 'Escape') return;
+        closePresetMenu();
+      };
+      const installDocListeners = () => {
+        if (docListenersInstalled) return;
+        docListenersInstalled = true;
+        document.addEventListener('click', onDocClick);
+        document.addEventListener('keydown', onDocKeyDown);
+      };
+      const removeDocListeners = () => {
+        if (!docListenersInstalled) return;
+        docListenersInstalled = false;
+        document.removeEventListener('click', onDocClick);
+        document.removeEventListener('keydown', onDocKeyDown);
+      };
+      const closePresetMenu = () => {
+        presetMenu.classList.add('hidden');
+        removeDocListeners();
+      };
       presetToggle.addEventListener('click', (event) => {
         event.stopPropagation();
+        const willOpen = presetMenu.classList.contains('hidden');
         presetMenu.classList.toggle('hidden');
+        if (willOpen) {
+          installDocListeners();
+        } else {
+          removeDocListeners();
+        }
       });
       presetMenu.addEventListener('click', (event) => {
         const target = event.target;
@@ -421,13 +418,13 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
         const selected = normalizeFlags(item.getAttribute('data-flags') || '');
         const force = item.classList.contains('code-preset-item-default');
         flagsInput.value = selected;
-        presetMenu.classList.add('hidden');
+        closePresetMenu();
         void applyFlags({ force });
       });
       container.addEventListener('click', (event) => {
         if (!(event.target instanceof HTMLElement)) return;
         if (event.target.closest('.code-flags-combo')) return;
-        presetMenu.classList.add('hidden');
+        closePresetMenu();
       });
     }
     if (flagsInput) {
@@ -439,12 +436,46 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
     }
 
     if (flagsHelp && helpPanel && helpContent) {
-      flagsHelp.addEventListener('click', async () => {
+      let helpEscapeListenerInstalled = false;
+      let helpOutsideClickListenerInstalled = false;
+      const onHelpEscape = (event) => {
+        if (event.key !== 'Escape') return;
+        closeHelpPanel();
+      };
+      const onHelpOutsideClick = (event) => {
+        if (container.contains(event.target)) return;
+        closeHelpPanel();
+      };
+      const openHelpPanel = () => {
+        helpPanel.classList.remove('hidden');
+        if (!helpEscapeListenerInstalled) {
+          helpEscapeListenerInstalled = true;
+          document.addEventListener('keydown', onHelpEscape);
+        }
+        if (!helpOutsideClickListenerInstalled) {
+          helpOutsideClickListenerInstalled = true;
+          document.addEventListener('click', onHelpOutsideClick);
+        }
+      };
+      const closeHelpPanel = () => {
+        helpPanel.classList.add('hidden');
+        if (helpEscapeListenerInstalled) {
+          helpEscapeListenerInstalled = false;
+          document.removeEventListener('keydown', onHelpEscape);
+        }
+        if (helpOutsideClickListenerInstalled) {
+          helpOutsideClickListenerInstalled = false;
+          document.removeEventListener('click', onHelpOutsideClick);
+        }
+      };
+
+      flagsHelp.addEventListener('click', async (event) => {
+        event.stopPropagation();
         if (!helpPanel.classList.contains('hidden')) {
-          helpPanel.classList.add('hidden');
+          closeHelpPanel();
           return;
         }
-        helpPanel.classList.remove('hidden');
+        openHelpPanel();
         if (helpContent.textContent && helpContent.textContent.trim()) return;
         helpContent.textContent = 'Loading...';
         try {
@@ -453,11 +484,13 @@ export async function render(container, { sha, scrollState, onScrollChange }) {
           helpContent.textContent = err && err.message ? err.message : String(err);
         }
       });
-    }
-    if (helpClose && helpPanel) {
-      helpClose.addEventListener('click', () => {
-        helpPanel.classList.add('hidden');
-      });
+
+      if (helpClose) {
+        helpClose.addEventListener('click', (event) => {
+          event.stopPropagation();
+          closeHelpPanel();
+        });
+      }
     }
 
   } catch (err) {

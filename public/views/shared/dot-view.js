@@ -1,68 +1,30 @@
-import { escapeHtml, generateLineNumbers } from './text-utils.js';
+import { generateLineNumbers, highlightWithRules } from './text-utils.js';
 
 let vizScriptsPromise = null;
 const VIZ_TOTAL_MEMORY = 512 * 1024 * 1024; // 512 MB
 
 /**
  * Purpose: Render DOT source with lightweight syntax highlighting.
- * How: Escapes the source, wraps token classes with placeholders, then restores highlighted HTML spans.
+ * How: Builds ordered DOT highlight rules and applies them through the shared placeholder-safe highlighter.
  */
 function highlightDot(dot) {
-  const tokens = [];
-  let tokenId = 0;
-
-  /**
-   * Purpose: Protect already-highlighted fragments from later regex passes.
-   * How: Stores fragment HTML in a token table and returns a unique placeholder marker.
-   */
-  function placeholder(html) {
-    const id = `__DOT_TOKEN_${tokenId++}__`;
-    tokens.push({ id, html });
-    return id;
-  }
-
-  let result = escapeHtml(dot);
-
-  result = result.replace(/(\/\*[\s\S]*?\*\/)/g, (match) => {
-    return placeholder(`<span class="dot-comment">${match}</span>`);
+  const rules = [];
+  rules.push({ pattern: /(\/\*[\s\S]*?\*\/)/g, className: 'dot-comment' });
+  rules.push({ pattern: /(^\s*#.*$)/gm, className: 'dot-comment' });
+  rules.push({ pattern: /(\/\/[^\n]*)/g, className: 'dot-comment' });
+  rules.push({ pattern: /("(?:[^"\\]|\\.)*")/g, className: 'dot-string' });
+  rules.push({
+    pattern: /\b(strict|graph|digraph|subgraph|node|edge)\b/g,
+    className: 'dot-keyword'
   });
-
-  result = result.replace(/(^\s*#.*$)/gm, (match) => {
-    return placeholder(`<span class="dot-comment">${match}</span>`);
+  rules.push({
+    pattern:
+      /\b(rankdir|rank|label|shape|style|color|fillcolor|fontcolor|fontsize|fontname|penwidth|weight|dir|arrowhead|arrowsize|labelloc|labeljust|splines|constraint|ordering|group|peripheries|margin|width|height|fixedsize)\b/g,
+    className: 'dot-attr'
   });
-
-  result = result.replace(/(\/\/[^\n]*)/g, (match) => {
-    return placeholder(`<span class="dot-comment">${match}</span>`);
-  });
-
-  result = result.replace(/("(?:[^"\\]|\\.)*")/g, (match) => {
-    return placeholder(`<span class="dot-string">${match}</span>`);
-  });
-
-  result = result.replace(/\b(strict|graph|digraph|subgraph|node|edge)\b/g, (match) => {
-    return placeholder(`<span class="dot-keyword">${match}</span>`);
-  });
-
-  result = result.replace(
-    /\b(rankdir|rank|label|shape|style|color|fillcolor|fontcolor|fontsize|fontname|penwidth|weight|dir|arrowhead|arrowsize|labelloc|labeljust|splines|constraint|ordering|group|peripheries|margin|width|height|fixedsize)\b/g,
-    (match) => {
-      return placeholder(`<span class="dot-attr">${match}</span>`);
-    }
-  );
-
-  result = result.replace(/\b(\d+\.?\d*)\b/g, (match) => {
-    return placeholder(`<span class="dot-number">${match}</span>`);
-  });
-
-  result = result.replace(/(\-\>|--|=|\{|\}|\[|\]|,|:)/g, (match) => {
-    return placeholder(`<span class="dot-operator">${match}</span>`);
-  });
-
-  for (const token of tokens) {
-    result = result.replace(token.id, token.html);
-  }
-
-  return result;
+  rules.push({ pattern: /\b(\d+\.?\d*)\b/g, className: 'dot-number' });
+  rules.push({ pattern: /(\-\>|--|=|\{|\}|\[|\]|,|:)/g, className: 'dot-operator' });
+  return highlightWithRules(dot, rules, '__DOT_TOKEN_');
 }
 
 /**

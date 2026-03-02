@@ -4,6 +4,40 @@
  */
 import { FaustOrbitUI } from '../vendor/faust-orbit-ui/faust-orbit-ui.js';
 import { TOOLTIP_TEXTS } from '../tooltip-texts.js';
+import {
+  LOCAL_RUN_UI_OWNER,
+  LOCAL_OWNER_RELEASE_MS,
+  MAX_COMPILED_RUN_CACHE,
+  PARAM_SMOOTH_INTERVAL_MS,
+  PARAM_SMOOTH_EPSILON,
+  ORBIT_PARAM_SYNC_INTERVAL_MS,
+  ORBIT_POSITION_EPSILON,
+} from './shared/run-constants.js';
+import {
+  clamp,
+  sleep,
+  getCanvasSize,
+  resizeCanvasToDisplaySize,
+  isStaleRunRenderError,
+  throwIfStaleRender
+} from './shared/run-utils.js';
+import {
+  normalizeRunParamCell,
+  normalizeRunParamCells,
+  cloneParamCells,
+  fingerprintRunParams
+} from './shared/run-params-utils.js';
+import {
+  setMidiUiKeyActive,
+  releaseComputerMidiNotes,
+  isTypingTarget
+} from './shared/run-midi-utils.js';
+import {
+  buildLogBands,
+  detectTopPeaks,
+  computeSpectrumFeatures,
+  computeAudioQuality
+} from './shared/run-spectrum-utils.js';
 
 // Audio graph runtime (single active DSP instance for the Run view).
 let audioContext = null;
@@ -99,46 +133,8 @@ let orbitLayoutRetryTimer = null;
 let runRenderSeq = 0;
 let remoteSyncInFlight = false;
 const compiledRunCache = new Map();
-// Owner identifier used by this front instance while a local UI interaction is active.
-const LOCAL_RUN_UI_OWNER = 'ui:run';
-// Delay before releasing local owner after the last local write on a parameter.
-const LOCAL_OWNER_RELEASE_MS = 220;
-const MAX_COMPILED_RUN_CACHE = 16;
-const PARAM_SMOOTH_INTERVAL_MS = 16;
-const PARAM_SMOOTH_EPSILON = 1e-4;
-const ORBIT_PARAM_SYNC_INTERVAL_MS = 33;
-const ORBIT_POSITION_EPSILON = 0.25;
 const paramSmooth = new Map();
 const localOwnerReleaseTimers = new Map();
-const STALE_RUN_RENDER_ERROR = 'STALE_RUN_RENDER';
-
-/**
- * Purpose: Create a sentinel error used to abort stale asynchronous run renders.
- * How: Builds an `Error` instance with a dedicated name/value used by stale-render guards.
- */
-function createStaleRunRenderError() {
-  const err = new Error(STALE_RUN_RENDER_ERROR);
-  err.name = STALE_RUN_RENDER_ERROR;
-  return err;
-}
-
-/**
- * Purpose: Detect stale-render sentinel errors.
- * How: Checks object shape and compares `name` against the stale-render error tag.
- */
-function isStaleRunRenderError(err) {
-  return !!(err && typeof err === 'object' && err.name === STALE_RUN_RENDER_ERROR);
-}
-
-/**
- * Purpose: Abort current render flow when a stale-render condition is detected.
- * How: Evaluates an optional stale predicate and throws the dedicated stale-render sentinel error when true.
- */
-function throwIfStaleRender(isStale) {
-  if (typeof isStale === 'function' && isStale()) {
-    throw createStaleRunRenderError();
-  }
-}
 
 /**
  * Purpose: Keep compiled run-program cache size bounded.
@@ -1055,7 +1051,7 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
   const noteOn = async (note) => {
     if (activeMidiNote !== null) return;
     activeMidiNote = note;
-    setMidiUiKeyActive(note, true);
+    setMidiUiKeyActive(midiUiKeyByNote, note, true);
     if (handlers && handlers.noteOn) {
       await handlers.noteOn(note, 0.8);
     }
@@ -1068,7 +1064,7 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
     if (activeMidiNote === null) return;
     const note = activeMidiNote;
     activeMidiNote = null;
-    setMidiUiKeyActive(note, false);
+    setMidiUiKeyActive(midiUiKeyByNote, note, false);
     if (handlers && handlers.noteOff) {
       handlers.noteOff(note);
     }
@@ -1129,12 +1125,22 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
       event.preventDefault();
       if (pressedKey === 'z') {
         if (octaveShift > -4) {
-          releaseComputerMidiNotes(handlers);
+          releaseComputerMidiNotes(
+            midiComputerActiveNotes,
+            midiUiKeyByNote,
+            handlers,
+            setMidiUiKeyActive
+          );
           octaveShift -= 1;
           updateMidiHint();
         }
       } else if (octaveShift < 4) {
-        releaseComputerMidiNotes(handlers);
+        releaseComputerMidiNotes(
+          midiComputerActiveNotes,
+          midiUiKeyByNote,
+          handlers,
+          setMidiUiKeyActive
+        );
         octaveShift += 1;
         updateMidiHint();
       }
@@ -1147,7 +1153,7 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
     event.preventDefault();
     if (midiComputerActiveNotes.has(event.code)) return;
     midiComputerActiveNotes.set(event.code, note);
-    setMidiUiKeyActive(note, true);
+    setMidiUiKeyActive(midiUiKeyByNote, note, true);
     if (handlers && handlers.noteOn) {
       Promise.resolve(handlers.noteOn(note, 0.8)).catch(() => {});
     }
@@ -1158,14 +1164,19 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
     if (!Number.isFinite(note)) return;
     event.preventDefault();
     midiComputerActiveNotes.delete(event.code);
-    setMidiUiKeyActive(note, false);
+    setMidiUiKeyActive(midiUiKeyByNote, note, false);
     if (handlers && handlers.noteOff) {
       handlers.noteOff(note);
     }
   };
 
   midiKeyboardBlurHandler = () => {
-    releaseComputerMidiNotes(handlers);
+    releaseComputerMidiNotes(
+      midiComputerActiveNotes,
+      midiUiKeyByNote,
+      handlers,
+      setMidiUiKeyActive
+    );
   };
 
   window.addEventListener('keydown', midiKeyboardKeyDownHandler);
@@ -1197,31 +1208,6 @@ function renderMidiKeyboard(container, ui, handlers, options = {}) {
 }
 
 /**
- * Purpose: Implement `setMidiUiKeyActive` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function setMidiUiKeyActive(note, active) {
-  const key = midiUiKeyByNote.get(note);
-  if (!key) return;
-  key.classList.toggle('active', active);
-}
-
-/**
- * Purpose: Implement `releaseComputerMidiNotes` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function releaseComputerMidiNotes(handlers) {
-  const notes = new Set(midiComputerActiveNotes.values());
-  midiComputerActiveNotes.clear();
-  for (const note of notes) {
-    setMidiUiKeyActive(note, false);
-    if (handlers && handlers.noteOff) {
-      handlers.noteOff(note);
-    }
-  }
-}
-
-/**
  * Purpose: Implement `detachComputerMidiKeyboard` in the Run view.
  * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
@@ -1247,17 +1233,6 @@ function detachComputerMidiKeyboard() {
     key.classList.remove('active');
   }
   midiUiKeyByNote.clear();
-}
-
-/**
- * Purpose: Implement `isTypingTarget` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function isTypingTarget(target) {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  const tag = target.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
 /**
@@ -2485,14 +2460,6 @@ function forceOrbitReprojection(baseState, values) {
   enforceOrbitGeometryFromParams(values || {});
 }
 
-/**
- * Purpose: Implement `clamp` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
 function collectButtonPaths(ui) {
   const paths = [];
   if (!Array.isArray(ui)) return paths;
@@ -2838,59 +2805,6 @@ function findMidiTargets(ui) {
 }
 
 /**
- * Purpose: Implement `normalizeRunParamCell` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function normalizeRunParamCell(path, input, fallbackTs = Date.now()) {
-  // Accept legacy numeric payloads and normalize to full ParamCell.
-  if (!path) return null;
-  if (typeof input === 'number' && Number.isFinite(input)) {
-    return { v: input, d: fallbackTs, owner: null };
-  }
-  if (!input || typeof input !== 'object') return null;
-  const v = Number(input.v);
-  if (!Number.isFinite(v)) return null;
-  const dRaw = Number(input.d);
-  const d = Number.isFinite(dRaw) ? dRaw : fallbackTs;
-  const ownerRaw = input.owner;
-  const owner =
-    ownerRaw === null
-      ? null
-      : typeof ownerRaw === 'string' && ownerRaw.trim()
-        ? ownerRaw.trim()
-        : null;
-  return { v, d, owner };
-}
-
-/**
- * Purpose: Implement `normalizeRunParamCells` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function normalizeRunParamCells(input, fallbackTs = Date.now()) {
-  // Defensive normalization: invalid paths/cells are ignored.
-  const cells = {};
-  if (!input || typeof input !== 'object') return cells;
-  for (const [path, value] of Object.entries(input)) {
-    const cell = normalizeRunParamCell(path, value, fallbackTs);
-    if (!cell) continue;
-    cells[path] = cell;
-  }
-  return cells;
-}
-
-/**
- * Purpose: Implement `cloneParamCells` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function cloneParamCells(input) {
-  const output = {};
-  for (const [path, cell] of Object.entries(input || {})) {
-    output[path] = { v: cell.v, d: cell.d, owner: cell.owner ?? null };
-  }
-  return output;
-}
-
-/**
  * Purpose: Implement `clampParamValue` in the Run view.
  * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
@@ -3127,19 +3041,6 @@ function applyRemoteRunParams(remoteParams) {
     if (emitRunStateFn) emitRunStateFn();
     sendRunParamsSnapshot();
   }
-}
-
-/**
- * Purpose: Implement `fingerprintRunParams` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function fingerprintRunParams(input) {
-  // Fingerprint includes value + timestamp + owner to detect semantic changes only.
-  const cells = normalizeRunParamCells(input, 0);
-  const entries = Object.entries(cells)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([path, cell]) => `${path}:${Number(cell.v)}:${Number(cell.d)}:${cell.owner || ''}`);
-  return entries.join('|');
 }
 
 /**
@@ -3520,205 +3421,6 @@ function buildSpectrumSummary(scope, data, meta) {
 }
 
 /**
- * Purpose: Implement `buildLogBands` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function buildLogBands(data, sampleRate, fmin, fmax, count, floorDb) {
-  const bands = [];
-  const binCount = data.length;
-  const nyquist = sampleRate / 2;
-  const low = Math.max(1, fmin);
-  const high = Math.min(fmax, nyquist);
-  const logMin = Math.log(low);
-  const logMax = Math.log(high);
-  for (let b = 0; b < count; b++) {
-    const t0 = b / count;
-    const t1 = (b + 1) / count;
-    const bandF0 = Math.exp(logMin + (logMax - logMin) * t0);
-    const bandF1 = Math.exp(logMin + (logMax - logMin) * t1);
-    const i0 = Math.max(1, Math.floor((bandF0 / high) * (binCount - 1)));
-    const i1 = Math.max(i0 + 1, Math.ceil((bandF1 / high) * (binCount - 1)));
-    let maxDb = floorDb;
-    for (let i = i0; i <= Math.min(binCount - 1, i1); i++) {
-      const v = data[i];
-      if (Number.isFinite(v) && v > maxDb) maxDb = v;
-    }
-    bands.push(Math.round(maxDb));
-  }
-  return bands;
-}
-
-/**
- * Purpose: Implement `detectTopPeaks` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function detectTopPeaks(data, sampleRate, fmax, floorDb, peaksCount) {
-  const binCount = data.length;
-  const threshold = floorDb + 10;
-  const peaks = [];
-  for (let i = 2; i < binCount - 2; i++) {
-    const v = data[i];
-    if (!Number.isFinite(v) || v < threshold) continue;
-    if (v < data[i - 1] || v < data[i + 1]) continue;
-    const hz = (i / (binCount - 1)) * fmax;
-    const q = estimatePeakQ(data, i, sampleRate);
-    peaks.push({ hz: Math.round(hz), dbQ: Math.round(v), q });
-  }
-  peaks.sort((a, b) => b.dbQ - a.dbQ);
-  return peaks.slice(0, peaksCount);
-}
-
-/**
- * Purpose: Implement `estimatePeakQ` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function estimatePeakQ(data, peakIndex, sampleRate) {
-  const peakDb = data[peakIndex];
-  if (!Number.isFinite(peakDb)) return 0;
-  const target = peakDb - 3;
-  let left = peakIndex;
-  let right = peakIndex;
-  while (left > 1 && data[left] > target) left--;
-  while (right < data.length - 2 && data[right] > target) right++;
-  const nyquist = sampleRate / 2;
-  const peakHz = (peakIndex / (data.length - 1)) * nyquist;
-  const leftHz = (left / (data.length - 1)) * nyquist;
-  const rightHz = (right / (data.length - 1)) * nyquist;
-  const bandwidth = Math.max(1, rightHz - leftHz);
-  return Number((peakHz / bandwidth).toFixed(2));
-}
-/**
- * Purpose: Implement `computeSpectrumFeatures` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function computeSpectrumFeatures(data, sampleRate, fmax, floorDb) {
-  const eps = 1e-12;
-  const powers = data.map((db) => Math.max(eps, Math.pow(10, ((Number.isFinite(db) ? db : floorDb) / 10))));
-  let powerSum = 0;
-  let weightedFreq = 0;
-  let maxDb = floorDb;
-  for (let i = 0; i < powers.length; i++) {
-    const p = powers[i];
-    const hz = (i / (powers.length - 1)) * fmax;
-    powerSum += p;
-    weightedFreq += p * hz;
-    if (data[i] > maxDb) maxDb = data[i];
-  }
-  const avgPower = powerSum / Math.max(1, powers.length);
-  const rmsDb = 10 * Math.log10(Math.max(eps, avgPower));
-  const centroidHz = powerSum > 0 ? weightedFreq / powerSum : 0;
-  const rolloff95Hz = computeRolloff95(powers, fmax);
-  const flatness = computeFlatness(powers);
-  return {
-    rmsDbQ: Math.round(rmsDb),
-    centroidHz: Math.round(centroidHz),
-    rolloff95Hz: Math.round(rolloff95Hz),
-    flatnessQ: Math.round(Math.max(0, Math.min(1, flatness)) * 100),
-    crestDbQ: Math.round(maxDb - rmsDb)
-  };
-}
-
-/**
- * Purpose: Implement `computeAudioQuality` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function computeAudioQuality(samples) {
-  if (!samples || samples.length < 2) {
-    return {
-      peakDbFSQ: -120,
-      clipSampleCount: 0,
-      clipRatioQ: 0,
-      dcOffsetQ: 0,
-      clickCount: 0,
-      clickScoreQ: 0
-    };
-  }
-
-  const clipThreshold = 0.999;
-  const clickDerivThreshold = 0.35;
-  const clickRefractory = 8;
-  let maxAbs = 0;
-  let sum = 0;
-  let clipSampleCount = 0;
-  let clickCount = 0;
-  let lastClickIndex = -clickRefractory;
-  let maxDeriv = 0;
-
-  for (let i = 0; i < samples.length; i++) {
-    const x = Number.isFinite(samples[i]) ? samples[i] : 0;
-    const ax = Math.abs(x);
-    if (ax > maxAbs) maxAbs = ax;
-    if (ax >= clipThreshold) clipSampleCount += 1;
-    sum += x;
-    if (i === 0) continue;
-    const d = Math.abs(x - samples[i - 1]);
-    if (d > maxDeriv) maxDeriv = d;
-    if (d > clickDerivThreshold && i - lastClickIndex >= clickRefractory) {
-      clickCount += 1;
-      lastClickIndex = i;
-    }
-  }
-
-  const n = samples.length;
-  const mean = sum / n;
-  const peakDbFS = maxAbs > 1e-6 ? 20 * Math.log10(maxAbs) : -120;
-  const clipRatioQ = Math.round((1000 * clipSampleCount) / n);
-  const dcOffsetQ = Math.round(Math.abs(mean) * 1000);
-  const clickDensity = (clickCount / Math.max(1, n / 64)) * 100;
-  const clickScoreQ = Math.max(
-    0,
-    Math.min(100, Math.round(clickDensity + Math.max(0, maxDeriv - 0.25) * 120 + clipRatioQ * 0.5))
-  );
-
-  return {
-    peakDbFSQ: Math.round(Math.max(-120, Math.min(0, peakDbFS))),
-    clipSampleCount,
-    clipRatioQ,
-    dcOffsetQ,
-    clickCount,
-    clickScoreQ
-  };
-}
-
-/**
- * Purpose: Implement `computeRolloff95` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function computeRolloff95(powers, fmax) {
-  let total = 0;
-  for (const p of powers) total += p;
-  if (total <= 0) return 0;
-  const threshold = total * 0.95;
-  let cumulative = 0;
-  for (let i = 0; i < powers.length; i++) {
-    cumulative += powers[i];
-    if (cumulative >= threshold) {
-      return (i / (powers.length - 1)) * fmax;
-    }
-  }
-  return fmax;
-}
-
-/**
- * Purpose: Implement `computeFlatness` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function computeFlatness(powers) {
-  const eps = 1e-12;
-  let sumLog = 0;
-  let sum = 0;
-  for (const p of powers) {
-    const x = Math.max(eps, p);
-    sumLog += Math.log(x);
-    sum += x;
-  }
-  const n = Math.max(1, powers.length);
-  const gm = Math.exp(sumLog / n);
-  const am = sum / n;
-  return am > 0 ? gm / am : 0;
-}
-
-/**
  * Purpose: Implement `sendRunParamsSnapshot` in the Run view.
  * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
@@ -3757,14 +3459,6 @@ async function executeLocalTrigger(path, holdMs) {
   // Ensure remote shared state reflects button release even with throttle.
   sendRunParamsSnapshot(true);
 }
-/**
- * Purpose: Implement `sleep` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function applyRunState(runState, controls) {
   if (!runState) return;
   if (runState.orbitUi && typeof runState.orbitUi === 'object') {
@@ -4394,26 +4088,6 @@ function drawSpectrumGrid(ctx, width, height, scope) {
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillText(`C${octave}`, x + 2, 2);
-    }
-  }
-}
-/**
- * Purpose: Implement `getCanvasSize` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function getCanvasSize(canvas) {
-  return { width: canvas.clientWidth, height: canvas.clientHeight };
-}
-
-function resizeCanvasToDisplaySize(canvas, ctx) {
-  const rect = canvas.getBoundingClientRect();
-  const width = Math.round(rect.width);
-  const height = Math.round(rect.height);
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-    if (ctx) {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
   }
 }

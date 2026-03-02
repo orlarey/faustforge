@@ -2,7 +2,7 @@
  * Purpose: Define the DSP source view.
  * How: Fetches `user_code.dsp`, highlights Faust syntax, and renders synchronized line-number scrolling.
  */
-import { escapeHtml, generateLineNumbers } from './shared/text-utils.js';
+import { generateLineNumbers, highlightWithRules } from './shared/text-utils.js';
 import { setupCodeEditorInteractions } from './shared/code-editor-view.js';
 
 /**
@@ -34,58 +34,18 @@ const FAUST_FUNCTIONS = [
 
 /**
  * Purpose: Apply lightweight Faust syntax highlighting on source text.
- * How: Escapes HTML, replaces token categories with placeholders, then restores styled HTML spans.
+ * How: Builds ordered Faust highlight rules and applies them through the shared placeholder-safe highlighter.
  */
 function highlightFaust(code) {
-  const tokens = [];
-  let tokenId = 0;
-
-  /**
-   * Purpose: Protect highlighted fragments from later regex passes.
-   * How: Stores fragment HTML in a token table and returns a unique placeholder marker.
-   */
-  function placeholder(html) {
-    const id = `__TOKEN_${tokenId++}__`;
-    tokens.push({ id, html });
-    return id;
-  }
-
-  // Escape HTML first.
-  let result = escapeHtml(code);
-
-  // 1. Line comments (protect first).
-  result = result.replace(/(\/\/[^\n]*)/g, (match) => {
-    return placeholder(`<span class="faust-comment">${match}</span>`);
-  });
-
-  // 2. String literals.
-  result = result.replace(/("(?:[^"\\]|\\.)*")/g, (match) => {
-    return placeholder(`<span class="faust-string">${match}</span>`);
-  });
-
-  // 3. Numeric literals.
-  result = result.replace(/\b(\d+\.?\d*(?:e[+-]?\d+)?)\b/gi, (match) => {
-    return placeholder(`<span class="faust-number">${match}</span>`);
-  });
-
-  // 4. Keywords.
+  const rules = [];
+  rules.push({ pattern: /(\/\/[^\n]*)/g, className: 'faust-comment' });
+  rules.push({ pattern: /("(?:[^"\\]|\\.)*")/g, className: 'faust-string' });
+  rules.push({ pattern: /\b(\d+\.?\d*(?:e[+-]?\d+)?)\b/gi, className: 'faust-number' });
   const keywordPattern = new RegExp(`\\b(${FAUST_KEYWORDS.join('|')})\\b`, 'g');
-  result = result.replace(keywordPattern, (match) => {
-    return placeholder(`<span class="faust-keyword">${match}</span>`);
-  });
-
-  // 5. Built-in functions.
+  rules.push({ pattern: keywordPattern, className: 'faust-keyword' });
   const functionPattern = new RegExp(`\\b(${FAUST_FUNCTIONS.join('|')})\\b`, 'g');
-  result = result.replace(functionPattern, (match) => {
-    return placeholder(`<span class="faust-function">${match}</span>`);
-  });
-
-  // Restore all placeholder tokens.
-  for (const token of tokens) {
-    result = result.replace(token.id, token.html);
-  }
-
-  return result;
+  rules.push({ pattern: functionPattern, className: 'faust-function' });
+  return highlightWithRules(code, rules, '__FAUST_TOKEN_');
 }
 
 /**
