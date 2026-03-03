@@ -63,7 +63,21 @@ const VIEW_FADE_DURATION_MS = 3000;
 let viewTransitionSeq = 0;
 let activeViewTransition = null;
 const RUN_USAGE_ACTIVE_WINDOW_MS = 8000;
+const APP_PERF_LOG_ENABLED = true;
 const { applyTooltips, scheduleTooltipApply } = createTooltipManager(TOOLTIP_TEXTS);
+
+/**
+ * Purpose: Provide lightweight performance tracing for session/view navigation.
+ * How: Emits structured console logs with elapsed time from an optional start timestamp.
+ */
+function logAppPerf(stage, startMs = null, details = '') {
+  if (!APP_PERF_LOG_ENABLED || typeof console === 'undefined') return;
+  const elapsed = typeof startMs === 'number'
+    ? ` +${Math.round(performance.now() - startMs)}ms`
+    : '';
+  const suffix = details ? ` | ${details}` : '';
+  console.log(`[app-perf] ${stage}${elapsed}${suffix}`);
+}
 /**
  * Purpose: Implement `loadViews` in the app flow.
  * How: Reads and updates UI, session, and backend sync state for this step.
@@ -969,6 +983,7 @@ async function navigateToNext() {
  */
 async function loadSessionByIndex(index) {
   if (index < 0 || index >= state.sessions.length) return;
+  const sessionLoadStartedAt = performance.now();
 
   captureScrollLine();
 
@@ -979,12 +994,16 @@ async function loadSessionByIndex(index) {
   }
   state.sessionIndex = index;
   state.currentView = getEffectiveView(state.currentView);
+  logAppPerf('session:select', sessionLoadStartedAt, `sha=${session.sha1} view=${state.currentView}`);
 
   updateSessionNavigation();
   hideError();
+  const syncStartedAt = performance.now();
   await syncState({ sha1: session.sha1, view: state.currentView });
+  logAppPerf('session:syncState:done', syncStartedAt, `sha=${session.sha1}`);
 
   // Load session compilation/runtime errors.
+  const errorsStartedAt = performance.now();
   try {
     const errorsResponse = await fetch(`/api/${session.sha1}/errors.log`);
     if (errorsResponse.ok) {
@@ -996,10 +1015,14 @@ async function loadSessionByIndex(index) {
   } catch {
     // Ignore error-log loading failures.
   }
+  logAppPerf('session:errorsFetch:done', errorsStartedAt, `sha=${session.sha1}`);
 
   const preserveExisting = viewContainer.childElementCount > 0;
   showInterface({ preserveExisting });
+  const renderStartedAt = performance.now();
   await renderCurrentView();
+  logAppPerf('session:renderCurrentView:done', renderStartedAt, `sha=${session.sha1} view=${state.currentView}`);
+  logAppPerf('session:load:done', sessionLoadStartedAt, `sha=${session.sha1} view=${state.currentView}`);
 }
 /**
  * Purpose: Implement `loadEmptySession` in the app flow.

@@ -12,20 +12,8 @@ export function toFiniteNumber(input: unknown): number | null {
 }
 
 /**
- * Purpose: Normalize lock-owner identifiers for run parameters.
- * How: Converts `undefined`/`null` consistently and trims non-empty owner strings.
- */
-export function normalizeOwner(input: unknown): string | null | undefined {
-  if (input === undefined) return undefined;
-  if (input === null) return null;
-  if (typeof input !== 'string') return undefined;
-  const trimmed = input.trim();
-  return trimmed ? trimmed : null;
-}
-
-/**
  * Purpose: Normalize one incoming run-parameter cell payload.
- * How: Supports legacy numeric values, validates structured cell fields, and applies timestamp/owner defaults.
+ * How: Supports legacy numeric values, validates structured cell fields, and applies timestamp defaults.
  */
 export function normalizeRunParamCell(input: unknown, fallbackTs: number): RunParamCell | null {
   // Backward compatibility: accept legacy numeric payloads and upgrade to cells.
@@ -33,15 +21,15 @@ export function normalizeRunParamCell(input: unknown, fallbackTs: number): RunPa
     return { v: input, d: fallbackTs, owner: null };
   }
   if (!input || typeof input !== 'object') return null;
-  const obj = input as { v?: unknown; d?: unknown; owner?: unknown };
+  const obj = input as { v?: unknown; d?: unknown };
   const value = toFiniteNumber(obj.v);
   if (value === null) return null;
   const d = toFiniteNumber(obj.d);
-  const owner = normalizeOwner(obj.owner);
   return {
     v: value,
     d: d === null ? fallbackTs : d,
-    owner: owner === undefined ? null : owner
+    // Ownerless backend model: ownership metadata is intentionally ignored.
+    owner: null
   };
 }
 
@@ -83,14 +71,10 @@ export function toRunParamValues(params: RunParamMap): Record<string, number> {
 }
 
 /**
- * Purpose: Merge two run-parameter maps with ownership and freshness arbitration.
- * How: Applies lock checks, timestamp ordering, and explicit owner transition rules per parameter path.
+ * Purpose: Merge two run-parameter maps with freshness arbitration.
+ * How: Applies per-path timestamp ordering and keeps the most recent cell (last-write on equal timestamp).
  */
-export function mergeRunParamMaps(current: RunParamMap, incoming: RunParamMap, writer: string | null): RunParamMap {
-  // Per-param arbitration rules:
-  // 1) lock ownership: writer must own lock (or lock must be free),
-  // 2) freshness: incoming timestamp must be >= current timestamp,
-  // 3) lock transitions are explicit via incoming `owner`.
+export function mergeRunParamMaps(current: RunParamMap, incoming: RunParamMap): RunParamMap {
   const merged: RunParamMap = { ...current };
   for (const [path, incomingCell] of Object.entries(incoming)) {
     const existing = merged[path];
@@ -98,33 +82,18 @@ export function mergeRunParamMaps(current: RunParamMap, incoming: RunParamMap, w
       merged[path] = {
         v: incomingCell.v,
         d: incomingCell.d,
-        owner: incomingCell.owner ?? null
+        owner: null
       };
       continue;
     }
-    const existingOwner = normalizeOwner(existing.owner) ?? null;
-    const writerOwnsLock = !!writer && existingOwner === writer;
-    if (existingOwner && !writerOwnsLock) {
-      continue;
-    }
+    // Reject strictly older cells, accept equal timestamps (last POST received wins per-path).
     if (incomingCell.d < existing.d) {
       continue;
     }
-
-    let nextOwner = existingOwner;
-    const requestedOwner = normalizeOwner(incomingCell.owner);
-    if (requestedOwner !== undefined) {
-      if (requestedOwner === null) {
-        nextOwner = writerOwnsLock || !existingOwner ? null : existingOwner;
-      } else if (!existingOwner || writerOwnsLock || existingOwner === requestedOwner) {
-        nextOwner = requestedOwner;
-      }
-    }
-
     merged[path] = {
       v: incomingCell.v,
       d: incomingCell.d,
-      owner: nextOwner
+      owner: null
     };
   }
   return merged;

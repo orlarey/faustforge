@@ -8,10 +8,9 @@ interface RegisterRunStateRoutesOptions {
   stateStore: StateStore;
   markUsed: (sha1: string | null | undefined, weight?: number) => void;
   toFiniteNumber: (input: unknown) => number | null;
-  normalizeOwner: (input: unknown) => string | null | undefined;
   getRunParamMap: (state: AppState) => RunParamMap;
   toRunParamValues: (params: RunParamMap) => Record<string, number>;
-  mergeRunParamMaps: (current: RunParamMap, incoming: RunParamMap, writer: string | null) => RunParamMap;
+  mergeRunParamMaps: (current: RunParamMap, incoming: RunParamMap) => RunParamMap;
 }
 
 /**
@@ -23,7 +22,6 @@ export function registerRunStateRoutes({
   stateStore,
   markUsed,
   toFiniteNumber,
-  normalizeOwner,
   getRunParamMap,
   toRunParamValues,
   mergeRunParamMaps
@@ -61,7 +59,7 @@ export function registerRunStateRoutes({
 
   /**
    * Purpose: Update one run parameter cell by parameter path.
-   * How: Validates payload, merges one incoming cell with ownership/timestamp arbitration, and persists updated state.
+   * How: Validates payload, merges one incoming cell with timestamp arbitration, and persists updated state.
    */
   router.post('/run/param', (req: Request, res: Response) => {
     const state = stateStore.read();
@@ -79,16 +77,14 @@ export function registerRunStateRoutes({
       return;
     }
     const now = Date.now();
-    const writer = normalizeOwner(req.body?.uiId) ?? 'ui:mcp';
-    const requestedOwner = normalizeOwner(req.body?.owner);
     const requestedTs = toFiniteNumber(req.body?.d);
     const incomingCell: RunParamCell = {
       v: value,
       d: requestedTs === null ? now : requestedTs,
-      owner: requestedOwner === undefined ? null : requestedOwner
+      owner: null
     };
     const currentParams = getRunParamMap(state);
-    const nextParams = mergeRunParamMaps(currentParams, { [paramPath]: incomingCell }, writer);
+    const nextParams = mergeRunParamMaps(currentParams, { [paramPath]: incomingCell });
     const applied = nextParams[paramPath] || currentParams[paramPath] || { v: value, d: now, owner: null };
     const next = stateStore.update({ runParams: nextParams });
     markUsed(next.sha1, 0);

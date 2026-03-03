@@ -5,8 +5,6 @@
 import { FaustOrbitUI } from '../vendor/faust-orbit-ui/faust-orbit-ui.js';
 import { TOOLTIP_TEXTS } from '../tooltip-texts.js';
 import {
-  LOCAL_RUN_UI_OWNER,
-  LOCAL_OWNER_RELEASE_MS,
   MAX_COMPILED_RUN_CACHE,
   PARAM_SMOOTH_INTERVAL_MS,
   PARAM_SMOOTH_EPSILON,
@@ -22,7 +20,6 @@ import {
   throwIfStaleRender
 } from './shared/run-utils.js';
 import {
-  normalizeRunParamCell,
   normalizeRunParamCells,
   cloneParamCells,
   fingerprintRunParams
@@ -66,7 +63,7 @@ let controlsClassicPane = null;
 let controlsOrbitPane = null;
 // Shared param state for this view:
 // - `paramValues` is the fast numeric cache used by UI rendering and DSP polling.
-// - `paramCells` is the authoritative sync shape { v, d, owner } mirrored to backend.
+// - `paramCells` is the authoritative sync shape { v, d } mirrored to backend.
 // - `paramMetaByPath` stores min/max bounds extracted from Faust UI JSON.
 let paramValues = {};
 let paramCells = {};
@@ -87,6 +84,7 @@ let polyVoices = 0;
 let midiTargets = null;
 let activeMidiNote = null;
 let midiAccess = null;
+let midiAccessPromise = null;
 let midiSource = 'virtual';
 let midiInput = null;
 let midiOnly = true;
@@ -113,7 +111,6 @@ let lastAppliedTriggerNonce = 0;
 let lastAppliedMidiNonce = 0;
 let isSwitchingPolyphony = false;
 let runViewEnteredAt = 0;
-let lastAppliedRemoteRunParamsFingerprint = '';
 let orbitCanvas = null;
 let orbitBody = null;
 let orbitCtx = null;
@@ -133,14 +130,74 @@ let orbitParamSyncTimer = null;
 let orbitUiInstance = null;
 let orbitUiBatchDepth = 0;
 let orbitUiBatchSnapshotPending = false;
+let orbitUiBatchLastSentAt = 0;
 let orbitPaneResizeObserver = null;
 let orbitPaneResizeRaf = null;
 let orbitLayoutRetryTimer = null;
 let runRenderSeq = 0;
 let remoteSyncInFlight = false;
+let suppressUiParamChangeDepth = 0;
+const suppressedUiParamEchoByPath = new Map();
 const compiledRunCache = new Map();
 const paramSmooth = new Map();
-const localOwnerReleaseTimers = new Map();
+const RUN_PERF_LOG_ENABLED = true;
+
+/**
+ * Purpose: Provide lightweight performance tracing for Run view critical paths.
+ * How: Emits structured console logs with elapsed time from an optional start timestamp.
+ */
+function logRunPerf(stage, startMs = null, details = '') {
+  if (!RUN_PERF_LOG_ENABLED || typeof console === 'undefined') return;
+  const elapsed = typeof startMs === 'number'
+    ? ` +${Math.round(performance.now() - startMs)}ms`
+    : '';
+  const suffix = details ? ` | ${details}` : '';
+  console.log(`[run-perf] ${stage}${elapsed}${suffix}`);
+}
+
+/**
+ * Purpose: Execute programmatic UI updates without treating them as local user edits.
+ * How: Increments a re-entrant suppression depth around a callback and restores it in `finally`.
+ */
+function withSuppressedUiParamChange(fn) {
+  suppressUiParamChangeDepth += 1;
+  try {
+    return fn();
+  } finally {
+    suppressUiParamChangeDepth = Math.max(0, suppressUiParamChangeDepth - 1);
+  }
+}
+
+/**
+ * Purpose: Tag one programmatic DSP->UI param update to avoid feedback loops.
+ * How: Stores `{value, until}` for the path so asynchronous UI echo callbacks can be ignored briefly.
+ */
+function markSuppressedUiParamEcho(path, value, windowMs = 200) {
+  if (!path) return;
+  const safeWindow = Math.max(40, Math.min(1000, Math.round(windowMs)));
+  suppressedUiParamEchoByPath.set(path, {
+    value: Number(value),
+    until: Date.now() + safeWindow
+  });
+}
+
+/**
+ * Purpose: Detect whether a UI callback is an echo of a recent programmatic update.
+ * How: Matches path/value against a short-lived suppression map and clears expired entries lazily.
+ */
+function isSuppressedUiParamEcho(path, value) {
+  if (!path) return false;
+  const entry = suppressedUiParamEchoByPath.get(path);
+  if (!entry) return false;
+  const now = Date.now();
+  if (!entry.until || now > entry.until) {
+    suppressedUiParamEchoByPath.delete(path);
+    return false;
+  }
+  const uiValue = Number(value);
+  if (!Number.isFinite(uiValue) || !Number.isFinite(entry.value)) return false;
+  return Math.abs(uiValue - entry.value) <= 1e-6;
+}
 
 /**
  * Purpose: Keep compiled run-program cache size bounded.
@@ -169,6 +226,8 @@ export function getName() {
  * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 export async function render(container, { sha, runState, onRunStateChange, onDownload }) {
+  const renderStartedAt = performance.now();
+  logRunPerf('render:start', null, `sha=${sha} ua=${navigator.userAgent}`);
   // Live auto-refresh can re-render Run without a view switch.
   // Ensure no timer/listener/audio instance from a previous Run render survives.
   dispose();
@@ -559,9 +618,18 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
   setAudioToggleState(audioRunning);
 
   try {
+    const compileStartedAt = performance.now();
     await compileAndRenderUI(controlsEl, sha, polyVoices, { isStale: isRenderStale });
+    logRunPerf('render:compileAndRenderUI:done', compileStartedAt, `sha=${sha} mode=${polyVoices > 0 ? `poly:${polyVoices}` : 'mono'}`);
     throwIfStaleRender(isRenderStale);
-    await updateMidi();
+    const midiStartedAt = performance.now();
+    void updateMidi()
+      .then(() => {
+        logRunPerf('render:updateMidi:done', midiStartedAt, `sha=${sha}`);
+      })
+      .catch(() => {
+        logRunPerf('render:updateMidi:error', midiStartedAt, `sha=${sha}`);
+      });
     throwIfStaleRender(isRenderStale);
     setAudioToggleState(audioRunning);
   } catch (err) {
@@ -670,13 +738,17 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
   });
 
   remoteSyncTimer = setInterval(syncRemoteRunState, 120);
+  const firstSyncStartedAt = performance.now();
   await syncRemoteRunState();
+  logRunPerf('render:firstRemoteSync:done', firstSyncStartedAt, `sha=${sha}`);
 
-  await updateMidi();
   if (runState && runState.audioRunning) {
+    const startAudioStartedAt = performance.now();
     await startAudio();
+    logRunPerf('render:startAudio:done', startAudioStartedAt, `sha=${sha}`);
   }
   await publishPolyphonyState();
+  logRunPerf('render:done', renderStartedAt, `sha=${sha}`);
   emitRunState();
 
   /**
@@ -716,6 +788,79 @@ export async function render(container, { sha, runState, onRunStateChange, onDow
   }
 
 /**
+ * Purpose: Reconcile local and backend run-parameter snapshots during one SYNC tick.
+ * How: Builds `D'` per path by timestamp, applies local value deltas via hub path (`setParamValue`), then conditionally publishes.
+ */
+function reconcileRemoteRunParams(remoteParams) {
+  const now = Date.now();
+  const localSnapshot = cloneParamCells(normalizeRunParamCells(paramCells, now));
+  const remoteSnapshot = normalizeRunParamCells(remoteParams, now);
+  const reconciled = {};
+  const keys = new Set([...Object.keys(localSnapshot), ...Object.keys(remoteSnapshot)]);
+
+  for (const path of keys) {
+    const localCell = localSnapshot[path];
+    const remoteCell = remoteSnapshot[path];
+    if (localCell && !remoteCell) {
+      reconciled[path] = { v: localCell.v, d: localCell.d, owner: null };
+      continue;
+    }
+    if (!localCell && remoteCell) {
+      reconciled[path] = { v: remoteCell.v, d: remoteCell.d, owner: null };
+      continue;
+    }
+    if (!localCell || !remoteCell) continue;
+    if (localCell.d >= remoteCell.d) {
+      reconciled[path] = { v: localCell.v, d: localCell.d, owner: null };
+    } else {
+      reconciled[path] = { v: remoteCell.v, d: remoteCell.d, owner: null };
+    }
+  }
+
+  let anyLocalDelta = false;
+  for (const [path, cell] of Object.entries(reconciled)) {
+    const localCell = localSnapshot[path];
+    const localValue = localCell ? Number(localCell.v) : NaN;
+    const nextValue = Number(cell.v);
+    if (!Number.isFinite(localValue) || Math.abs(localValue - nextValue) > 1e-9) {
+      if (uiButtonPaths.has(path) && nextValue <= 0) {
+        pressedUiButtons.delete(path);
+      }
+      setParamValue(path, nextValue, {
+        timestamp: Number(cell.d),
+        skipSnapshot: true,
+        skipEmit: true,
+        skipOrbitSync: true
+      });
+      anyLocalDelta = true;
+    }
+  }
+
+  // Commit freshness timestamps (`L := D'`) without overwriting newer local writes.
+  let anyFreshnessCommit = false;
+  for (const [path, cell] of Object.entries(reconciled)) {
+    const current = paramCells[path];
+    if (!current || current.d <= cell.d) {
+      paramCells[path] = { v: cell.v, d: cell.d, owner: null };
+      paramValues[path] = cell.v;
+      anyFreshnessCommit = true;
+    }
+  }
+
+  if (anyLocalDelta || anyFreshnessCommit) {
+    requestOrbitSyncFromParams();
+    if (emitRunStateFn) emitRunStateFn();
+  }
+
+  const remoteFingerprint = fingerprintRunParams(remoteSnapshot);
+  const reconciledFingerprint = fingerprintRunParams(reconciled);
+  return {
+    shouldPublish: remoteFingerprint !== reconciledFingerprint,
+    reconciled
+  };
+}
+
+/**
  * Purpose: Implement `syncRemoteRunState` in the Run view.
  * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
@@ -729,13 +874,14 @@ async function syncRemoteRunState() {
       const remote = await response.json();
       if (!remote || remote.sha1 !== currentSha) return;
 
-      // Run params sync uses content fingerprinting so we can handle
-      // both legacy numeric maps and ParamCell maps without global timestamp coupling.
-      if (remote.runParams && typeof remote.runParams === 'object') {
-        const fingerprint = fingerprintRunParams(remote.runParams);
-        if (fingerprint && fingerprint !== lastAppliedRemoteRunParamsFingerprint) {
-          applyRemoteRunParams(remote.runParams);
-          lastAppliedRemoteRunParamsFingerprint = fingerprint;
+      {
+        const remoteRunParams =
+          remote.runParams && typeof remote.runParams === 'object'
+            ? remote.runParams
+            : {};
+        const reconciled = reconcileRemoteRunParams(remoteRunParams);
+        if (reconciled.shouldPublish) {
+          sendRunParamsSnapshot();
         }
       }
 
@@ -840,25 +986,33 @@ function markRunActivity() {
  * How: Updates Run view audio, MIDI, UI, and sync state for this step.
  */
 async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
+  const compileStartedAt = performance.now();
   const isStale = options && typeof options.isStale === 'function' ? options.isStale : null;
   throwIfStaleRender(isStale);
+  const fetchCodeStartedAt = performance.now();
   const codeResponse = await fetch(`/api/${sha}/user_code.dsp`);
+  logRunPerf('compile:fetchCode:done', fetchCodeStartedAt, `sha=${sha} status=${codeResponse.status}`);
   throwIfStaleRender(isStale);
   if (!codeResponse.ok) {
     throw new Error('DSP code not found');
   }
+  const codeReadStartedAt = performance.now();
   const code = await codeResponse.text();
+  logRunPerf('compile:readCodeText:done', codeReadStartedAt, `sha=${sha} bytes=${code.length}`);
   throwIfStaleRender(isStale);
   const modeKey = voices > 0 ? `poly:${voices}` : 'mono';
   const cacheKey = `${sha}::${modeKey}`;
   const cached = compiledRunCache.get(cacheKey);
 
   if (cached && cached.code === code && cached.generator) {
+    logRunPerf('compile:cache:hit', compileStartedAt, `sha=${sha} mode=${modeKey}`);
     cached.usedAt = Date.now();
     compiledGenerator = cached.generator;
     compiledGeneratorMode = modeKey;
     compiledUI = cached.ui;
   } else {
+    logRunPerf('compile:cache:miss', compileStartedAt, `sha=${sha} mode=${modeKey}`);
+    const importStartedAt = performance.now();
     const {
       FaustCompiler,
       LibFaust,
@@ -866,18 +1020,23 @@ async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
       FaustPolyDspGenerator,
       instantiateFaustModuleFromFile
     } = await import('../vendor/faustwasm/index.js');
+    logRunPerf('compile:importFaustWasm:done', importStartedAt, `sha=${sha}`);
     throwIfStaleRender(isStale);
 
     const base = `${window.location.origin}/libfaust-wasm/libfaust-wasm.js`;
+    const instantiateStartedAt = performance.now();
     const module = await instantiateFaustModuleFromFile(
       base,
       base.replace(/\.js$/, '.data'),
       base.replace(/\.js$/, '.wasm')
     );
+    logRunPerf('compile:instantiateModule:done', instantiateStartedAt, `sha=${sha}`);
     throwIfStaleRender(isStale);
     const compiler = new FaustCompiler(new LibFaust(module));
     const generator = voices > 0 ? new FaustPolyDspGenerator() : new FaustMonoDspGenerator();
+    const generatorCompileStartedAt = performance.now();
     const compiled = await generator.compile(compiler, 'dsp', code, '-ftz 2');
+    logRunPerf('compile:generatorCompile:done', generatorCompileStartedAt, `sha=${sha} mode=${modeKey} ok=${compiled ? 'true' : 'false'}`);
     throwIfStaleRender(isStale);
     if (!compiled) {
       throw new Error('Compilation failed');
@@ -908,6 +1067,7 @@ async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
     // Persist normalization so first Run entry does not replay stale button=1 state.
     sendRunParamsSnapshot(true);
   }
+  const postStateStartedAt = performance.now();
   try {
     await fetch('/api/state', {
       method: 'POST',
@@ -917,7 +1077,9 @@ async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
   } catch {
     // ignore
   }
+  logRunPerf('compile:postUiState:done', postStateStartedAt, `sha=${sha}`);
   throwIfStaleRender(isStale);
+  const controlsRenderStartedAt = performance.now();
   const prepared = prepareControlsContainer(container);
   controlsBg = prepared.bg;
   controlsContent = prepared.content;
@@ -935,6 +1097,8 @@ async function compileAndRenderUI(container, sha, voices = 0, options = {}) {
     finalizeControlsContainerSwap(container, controlsBg, controlsContent);
   });
   updateUiRoot(controlsContent);
+  logRunPerf('compile:renderControls:done', controlsRenderStartedAt, `sha=${sha}`);
+  logRunPerf('compile:done', compileStartedAt, `sha=${sha} mode=${modeKey}`);
 }
 
 /**
@@ -1317,6 +1481,8 @@ async function renderFaustUi(container, ui) {
     });
 
     faustUIInstance.paramChangeByUI = (path, value) => {
+      if (suppressUiParamChangeDepth > 0) return;
+      if (isSuppressedUiParamEcho(path, value)) return;
       try {
         let forceSnapshot = false;
         const isButton = uiButtonPaths.has(path);
@@ -1331,8 +1497,7 @@ async function renderFaustUi(container, ui) {
         }
         setParamValue(path, value, {
           smooth: !isButton,
-          skipSnapshot: isButton,
-          owner: LOCAL_RUN_UI_OWNER
+          skipSnapshot: isButton
         });
         if (forceSnapshot) {
           sendRunParamsSnapshot(true);
@@ -1375,12 +1540,17 @@ function renderOrbitUi(container, ui) {
         smooth: !isButton,
         skipSnapshot: true,
         skipEmit: true,
-        skipOrbitSync: true,
-        owner: LOCAL_RUN_UI_OWNER
+        skipOrbitSync: true
       });
       if (orbitUiBatchDepth > 0) {
         orbitUiBatchSnapshotPending = true;
+        const now = Date.now();
+        if (now - orbitUiBatchLastSentAt >= 150) {
+          orbitUiBatchLastSentAt = now;
+          sendRunParamsSnapshot();
+        }
       } else {
+        orbitUiBatchLastSentAt = Date.now();
         sendRunParamsSnapshot();
       }
       if (emitRunStateFn) emitRunStateFn();
@@ -1394,6 +1564,7 @@ function renderOrbitUi(container, ui) {
         orbitUiBatchDepth = Math.max(0, orbitUiBatchDepth - 1);
         if (orbitUiBatchDepth === 0 && orbitUiBatchSnapshotPending) {
           orbitUiBatchSnapshotPending = false;
+          orbitUiBatchLastSentAt = Date.now();
           sendRunParamsSnapshot(true);
         }
       },
@@ -2525,7 +2696,7 @@ function installRunSpaceShortcut() {
     }
     runSpacePressedPath = targetPath;
     pressedUiButtons.add(targetPath);
-    setParamValue(targetPath, 1, { skipSnapshot: true, owner: LOCAL_RUN_UI_OWNER });
+    setParamValue(targetPath, 1, { skipSnapshot: true });
     sendRunParamsSnapshot(true);
   };
   runSpaceKeyUpHandler = (event) => {
@@ -2535,7 +2706,7 @@ function installRunSpaceShortcut() {
     const path = runSpacePressedPath;
     runSpacePressedPath = null;
     pressedUiButtons.delete(path);
-    setParamValue(path, 0, { skipSnapshot: true, owner: null });
+    setParamValue(path, 0, { skipSnapshot: true });
     sendRunParamsSnapshot(true);
   };
   runSpaceBlurHandler = () => {
@@ -2543,7 +2714,7 @@ function installRunSpaceShortcut() {
     const path = runSpacePressedPath;
     runSpacePressedPath = null;
     pressedUiButtons.delete(path);
-    setParamValue(path, 0, { skipSnapshot: true, owner: null });
+    setParamValue(path, 0, { skipSnapshot: true });
     sendRunParamsSnapshot(true);
   };
   window.addEventListener('keydown', runSpaceKeyHandler);
@@ -2572,7 +2743,7 @@ function uninstallRunSpaceShortcut() {
     const path = runSpacePressedPath;
     runSpacePressedPath = null;
     pressedUiButtons.delete(path);
-    setParamValue(path, 0, { skipSnapshot: true, owner: null });
+    setParamValue(path, 0, { skipSnapshot: true });
     sendRunParamsSnapshot(true);
   }
 }
@@ -2589,7 +2760,7 @@ function releasePressedUiButtons() {
     if (protectedPath && path === protectedPath) {
       continue;
     }
-    setParamValue(path, 0, { owner: null });
+    setParamValue(path, 0);
     releasedAny = true;
   }
   if (protectedPath) {
@@ -2684,14 +2855,28 @@ function teardownUiZoomObserver() {
 async function ensureMidiAccess() {
   if (!('requestMIDIAccess' in navigator)) {
     midiAccess = null;
+    midiAccessPromise = null;
     return null;
   }
   if (midiAccess) return midiAccess;
+  if (midiAccessPromise) return midiAccessPromise;
+  midiAccessPromise = navigator.requestMIDIAccess()
+    .then((access) => {
+      midiAccess = access;
+      return access;
+    })
+    .catch(() => {
+      midiAccess = null;
+      return null;
+    })
+    .finally(() => {
+      midiAccessPromise = null;
+    });
   try {
-    midiAccess = await navigator.requestMIDIAccess();
-    return midiAccess;
+    return await midiAccessPromise;
   } catch {
     midiAccess = null;
+    midiAccessPromise = null;
     return null;
   }
 }
@@ -2847,66 +3032,27 @@ function setParamCell(path, value, options = {}) {
   // Local LWW register update per parameter:
   // - stale timestamps are rejected
   // - stored value is always clamped
-  // - owner is persisted with the same timestamped write
   const normalizedValue = clampParamValue(path, value);
   const timestamp =
     typeof options.timestamp === 'number' && Number.isFinite(options.timestamp)
       ? options.timestamp
       : Date.now();
-  const owner =
-    options.owner === null
-      ? null
-      : typeof options.owner === 'string' && options.owner.trim()
-        ? options.owner.trim()
-        : null;
   const current = paramCells[path];
   if (current && timestamp < current.d) {
     return { changed: false, value: current.v };
   }
   const sameValue = current && current.v === normalizedValue;
-  const sameOwner = current && (current.owner ?? null) === owner;
   const sameTimestamp = current && current.d === timestamp;
-  if (sameValue && sameOwner && sameTimestamp) {
+  if (sameValue && sameTimestamp) {
     return { changed: false, value: normalizedValue };
   }
   paramCells[path] = {
     v: normalizedValue,
     d: timestamp,
-    owner
+    owner: null
   };
   paramValues[path] = normalizedValue;
-  return { changed: !sameValue || !sameOwner, value: normalizedValue };
-}
-
-/**
- * Purpose: Implement `clearLocalOwnerReleaseTimer` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function clearLocalOwnerReleaseTimer(path) {
-  const timer = localOwnerReleaseTimers.get(path);
-  if (timer) {
-    clearTimeout(timer);
-    localOwnerReleaseTimers.delete(path);
-  }
-}
-
-/**
- * Purpose: Implement `scheduleLocalOwnerRelease` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function scheduleLocalOwnerRelease(path, delayMs = LOCAL_OWNER_RELEASE_MS) {
-  // Owner is held briefly after interaction updates to absorb dense UI events.
-  // Releasing owner is persisted so other writers can take over deterministically.
-  if (!path) return;
-  clearLocalOwnerReleaseTimer(path);
-  const timer = setTimeout(() => {
-    localOwnerReleaseTimers.delete(path);
-    const current = paramCells[path];
-    if (!current || current.owner !== LOCAL_RUN_UI_OWNER) return;
-    setParamCell(path, current.v, { owner: null, timestamp: Date.now() });
-    sendRunParamsSnapshot(true);
-  }, Math.max(40, Math.round(delayMs)));
-  localOwnerReleaseTimers.set(path, timer);
+  return { changed: !sameValue, value: normalizedValue };
 }
 
 /**
@@ -2920,41 +3066,24 @@ function setParamValue(path, value, options = {}) {
   const skipOrbitSync = options && options.skipOrbitSync === true;
   const smooth = options && options.smooth === true;
   const commit = options && options.commit === true;
-  const ownerOption =
-    options && Object.prototype.hasOwnProperty.call(options, 'owner')
-      ? options.owner
-      : undefined;
-  const owner =
-    ownerOption === undefined
-      ? undefined
-      : ownerOption === null
-        ? null
-        : String(ownerOption || '');
   const timestamp =
     typeof options.timestamp === 'number' && Number.isFinite(options.timestamp)
       ? options.timestamp
       : Date.now();
   try {
-    const current = paramCells[path];
-    // If another owner currently controls this param, local UI cannot steal it directly.
-    const ownerForCell = owner === undefined ? null : owner;
-    if (current && current.owner && current.owner !== LOCAL_RUN_UI_OWNER && ownerForCell === LOCAL_RUN_UI_OWNER) {
-      return;
-    }
     const nextCell = setParamCell(path, value, {
-      owner: ownerForCell,
       timestamp
     });
     const nextValue = nextCell.value;
-    if (current && current.v === nextValue && (current.owner ?? null) === (ownerForCell ?? null)) {
+    if (!nextCell.changed) {
       return;
     }
     applyParamToDsp(path, nextValue, { smooth, commit });
     if (faustUIInstance) {
-      faustUIInstance.paramChangeByDSP(path, nextValue);
-    }
-    if (ownerForCell === LOCAL_RUN_UI_OWNER) {
-      scheduleLocalOwnerRelease(path);
+      markSuppressedUiParamEcho(path, nextValue);
+      withSuppressedUiParamChange(() => {
+        faustUIInstance.paramChangeByDSP(path, nextValue);
+      });
     }
     if (!skipSnapshot) {
       sendRunParamsSnapshot();
@@ -3005,61 +3134,6 @@ function clearAllParamSmoothing() {
       clearTimeout(entry.timer);
     }
     paramSmooth.delete(path);
-  }
-}
-
-/**
- * Purpose: Implement `applyRemoteRunParams` in the Run view.
- * How: Updates Run view audio, MIDI, UI, and sync state for this step.
- */
-function applyRemoteRunParams(remoteParams) {
-  // Merge remote cells with local cells, honoring:
-  // 1) local active owner protection,
-  // 2) per-param timestamp freshness,
-  // 3) exact no-op skipping for identical cells.
-  const remoteCells = normalizeRunParamCells(remoteParams, 0);
-  let changed = false;
-  for (const [path, remoteCell] of Object.entries(remoteCells)) {
-    if (uiButtonPaths.has(path) && pressedUiButtons.has(path)) {
-      // Keep local hold authoritative while button is actively pressed by user.
-      continue;
-    }
-    const localCell = paramCells[path];
-    if (localCell && localCell.owner === LOCAL_RUN_UI_OWNER && remoteCell.owner !== LOCAL_RUN_UI_OWNER) {
-      continue;
-    }
-    if (localCell && remoteCell.d < localCell.d) continue;
-    const normalizedValue = clampParamValue(path, remoteCell.v);
-    if (
-      localCell &&
-      localCell.v === normalizedValue &&
-      localCell.d === remoteCell.d &&
-      (localCell.owner ?? null) === (remoteCell.owner ?? null)
-    ) {
-      continue;
-    }
-    try {
-      if (dspNode) {
-        dspNode.setParamValue(path, normalizedValue);
-      }
-      paramCells[path] = {
-        v: normalizedValue,
-        d: remoteCell.d,
-        owner: remoteCell.owner ?? null
-      };
-      paramValues[path] = normalizedValue;
-      if (faustUIInstance) {
-        faustUIInstance.paramChangeByDSP(path, normalizedValue);
-      }
-      changed = true;
-    } catch {
-      // ignore
-    }
-  }
-  if (changed) {
-    requestOrbitSyncFromParams();
-    if (emitRunStateFn) emitRunStateFn();
-    sendRunParamsSnapshot();
   }
 }
 
@@ -3134,7 +3208,10 @@ function applyParamValues() {
         dspNode.setParamValue(path, normalizedValue);
       }
       if (faustUIInstance) {
-        faustUIInstance.paramChangeByDSP(path, normalizedValue);
+        markSuppressedUiParamEcho(path, normalizedValue);
+        withSuppressedUiParamChange(() => {
+          faustUIInstance.paramChangeByDSP(path, normalizedValue);
+        });
       }
       if (paramValues[path] !== normalizedValue) {
         paramValues[path] = normalizedValue;
@@ -3225,7 +3302,7 @@ function attachOutputParamHandler() {
     paramCells[path] = {
       v: clampParamValue(path, value),
       d: Date.now(),
-      owner: current?.owner ?? null
+      owner: null
     };
     paramValues[path] = paramCells[path].v;
     if (faustUIInstance) {
@@ -3263,7 +3340,7 @@ function startParamPolling() {
           paramCells[path] = {
             v: clampParamValue(path, value),
             d: Date.now(),
-            owner: current?.owner ?? null
+            owner: null
           };
           paramValues[path] = paramCells[path].v;
           faustUIInstance.paramChangeByDSP(path, paramValues[path]);
@@ -3454,7 +3531,6 @@ function sendRunParamsSnapshot(force = false) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       runStateSha: currentSha,
-      runParamsUi: LOCAL_RUN_UI_OWNER,
       runParams: cloneParamCells(paramCells)
     })
   }).catch(() => {});
@@ -3473,9 +3549,9 @@ async function executeLocalTrigger(path, holdMs) {
   if (!audioRunning && typeof outputNode !== 'undefined') {
     startAudioOutput();
   }
-  setParamValue(path, 1, { owner: null });
+  setParamValue(path, 1);
   await sleep(duration);
-  setParamValue(path, 0, { owner: null });
+  setParamValue(path, 0);
   // Ensure remote shared state reflects button release even with throttle.
   sendRunParamsSnapshot(true);
 }
@@ -3553,6 +3629,7 @@ export function dispose() {
   midiTargets = null;
   activeMidiNote = null;
   midiAccess = null;
+  midiAccessPromise = null;
   midiSource = 'virtual';
   midiInput = null;
   uiParamPaths = [];
@@ -3569,6 +3646,7 @@ export function dispose() {
   orbitZoom = '100';
   orbitUiBatchDepth = 0;
   orbitUiBatchSnapshotPending = false;
+  orbitUiBatchLastSentAt = 0;
   if (orbitUiInstance) {
     orbitUiInstance.destroy();
     orbitUiInstance = null;
@@ -3601,6 +3679,8 @@ export function dispose() {
   }
   runRenderSeq += 1;
   remoteSyncInFlight = false;
+  suppressUiParamChangeDepth = 0;
+  suppressedUiParamEchoByPath.clear();
   controlsSplit = null;
   controlsClassicPane = null;
   controlsOrbitPane = null;
@@ -3609,14 +3689,9 @@ export function dispose() {
     remoteSyncTimer = null;
   }
   lastAppliedTriggerNonce = 0;
-  lastAppliedRemoteRunParamsFingerprint = '';
   pendingOrbitUi = null;
   lastSpectrumSummary = null;
   clearAllParamSmoothing();
-  for (const timer of localOwnerReleaseTimers.values()) {
-    clearTimeout(timer);
-  }
-  localOwnerReleaseTimers.clear();
 }
 
 /**

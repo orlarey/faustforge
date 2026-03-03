@@ -9,10 +9,9 @@ interface RegisterAppStateRoutesOptions {
   stateStore: StateStore;
   sessionManager: SessionManager;
   markUsed: (sha1: string | null | undefined, weight?: number) => void;
-  normalizeOwner: (input: unknown) => string | null | undefined;
   getRunParamMap: (state: AppState) => RunParamMap;
   normalizeRunParamMap: (input: unknown, fallbackTs: number) => RunParamMap;
-  mergeRunParamMaps: (current: RunParamMap, incoming: RunParamMap, writer: string | null) => RunParamMap;
+  mergeRunParamMaps: (current: RunParamMap, incoming: RunParamMap) => RunParamMap;
 }
 
 /**
@@ -24,7 +23,6 @@ export function registerAppStateRoutes({
   stateStore,
   sessionManager,
   markUsed,
-  normalizeOwner,
   getRunParamMap,
   normalizeRunParamMap,
   mergeRunParamMaps
@@ -52,7 +50,6 @@ export function registerAppStateRoutes({
       ui,
       runStateSha,
       runParams,
-      runParamsUi,
       runTransport,
       runTrigger,
       runPolyphony,
@@ -110,11 +107,10 @@ export function registerAppStateRoutes({
     if (runParams !== undefined) {
       if (acceptRunScopedWrite) {
         const now = Date.now();
-        const writer = normalizeOwner(runParamsUi) ?? null;
         const currentParams = getRunParamMap(currentState);
         const incomingParams = normalizeRunParamMap(runParams, now);
-        // Merge instead of blind overwrite so concurrent writers remain deterministic.
-        partial.runParams = mergeRunParamMaps(currentParams, incomingParams, writer);
+        // Merge per-path by timestamp instead of blind overwrite.
+        partial.runParams = mergeRunParamMaps(currentParams, incomingParams);
       }
     }
     if (runTransport !== undefined) {

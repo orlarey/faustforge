@@ -439,5 +439,6 @@ ghcr.io/orlarey/faustforge:latest
 - `SPECIFICATION-VSCODE-PLUGIN.md` (intégration VSCode <-> faustforge)
 - `SPECIFICATION-FAUST-CORE-UI.md`
 - `SPECIFICATION-FAUST-ORBIT-UI.md`
+- `SPECIFICATION-RUN-PARAM-SYNC.md` (synchronisation Run params: regular/orbit/frontend/backend)
 - `SPECIFICATION-LIBRARYDOC.md`
 - `SPECIFICATION_SPECTRUM.md`

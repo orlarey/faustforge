@@ -17,7 +17,6 @@ import { registerSystemRoutes } from './system-routes';
 import { registerAppStateRoutes } from './app-state-routes';
 import {
   toFiniteNumber,
-  normalizeOwner,
   normalizeRunParamMap,
   getRunParamMap,
   toRunParamValues,
@@ -110,7 +109,6 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     stateStore,
     sessionManager,
     markUsed,
-    normalizeOwner,
     getRunParamMap,
     normalizeRunParamMap,
     mergeRunParamMaps
@@ -121,7 +119,6 @@ export function createApiRouter(sessionManager: SessionManager, stateStore: Stat
     stateStore,
     markUsed,
     toFiniteNumber,
-    normalizeOwner,
     getRunParamMap,
     toRunParamValues,
     mergeRunParamMaps
