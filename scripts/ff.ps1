@@ -52,22 +52,26 @@ function Container-Running {
 }
 
 function Container-WorkspaceMount {
-  $m = docker inspect -f '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' $FF_NAME 2>$null
+  $ErrorActionPreference = "SilentlyContinue"
+  $m = docker inspect -f "{{range .Mounts}}{{if eq .Destination \"/workspace\"}}{{.Source}}{{end}}{{end}}" $FF_NAME 2>&1
   return ($m | Out-String).Trim()
 }
 
 function Container-SessionsMount {
-  $m = docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/sessions"}}{{.Source}}{{end}}{{end}}' $FF_NAME 2>$null
+  $ErrorActionPreference = "SilentlyContinue"
+  $m = docker inspect -f "{{range .Mounts}}{{if eq .Destination \"/app/sessions\"}}{{.Source}}{{end}}{{end}}" $FF_NAME 2>&1
   return ($m | Out-String).Trim()
 }
 
 function Container-HostPort {
-  $p = docker inspect -f '{{(index (index .HostConfig.PortBindings "3000/tcp") 0).HostPort}}' $FF_NAME 2>$null
+  $ErrorActionPreference = "SilentlyContinue"
+  $p = docker inspect -f "{{(index (index .HostConfig.PortBindings \`"3000/tcp\`") 0).HostPort}}" $FF_NAME 2>&1
   return ($p | Out-String).Trim()
 }
 
 function Container-Image {
-  $i = docker inspect -f '{{.Config.Image}}' $FF_NAME 2>$null
+  $ErrorActionPreference = "SilentlyContinue"
+  $i = docker inspect -f "{{.Config.Image}}" $FF_NAME 2>&1
   return ($i | Out-String).Trim()
 }
 
@@ -173,7 +177,7 @@ function Update-Forge {
 }
 
 function Logs-Forge { Ensure-Docker; docker logs -f $FF_NAME }
-function Status-Forge { Ensure-Docker; docker ps -a --filter "name=^/$FF_NAME$" --format "table {{.Names}}`t{{.Status}}`t{{.Ports}}" }
+function Status-Forge { Ensure-Docker; docker ps -a --filter "name=^/$FF_NAME$" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" }
 
 function Reset-Forge {
   Ensure-Docker
@@ -192,7 +196,13 @@ function Reset-Forge {
   }
 }
 
-$cmdArgs = @($ArgsList)
+$cmdArgs = if ($ArgsList -and $ArgsList.Count -gt 0) {
+  , @($ArgsList)
+} else {
+  @()
+}
+$knownCommands = @("start", "stop", "restart", "update", "logs", "status", "open", "reset", "help")
+
 if ($cmdArgs.Count -ge 2 -and $cmdArgs[0] -eq "--workspace") {
   $FF_WORKSPACE_DIR = (Resolve-Path -Path $cmdArgs[1]).Path
   if ($cmdArgs.Count -gt 2) {
@@ -211,7 +221,7 @@ if ($cmdArgs.Count -ge 2 -and $cmdArgs[0] -eq "start" -and (Test-Path -Path $cmd
   }
 }
 
-if ($cmdArgs.Count -ge 1 -and (Test-Path -Path $cmdArgs[0] -PathType Container)) {
+if ($cmdArgs.Count -ge 1 -and $cmdArgs[0] -and $cmdArgs[0] -notin $knownCommands -and (Test-Path -Path $cmdArgs[0] -PathType Container)) {
   $FF_WORKSPACE_DIR = (Resolve-Path -Path $cmdArgs[0]).Path
   if ($cmdArgs.Count -gt 1) {
     $cmdArgs = @("start") + $cmdArgs[1..($cmdArgs.Count - 1)]
@@ -225,7 +235,7 @@ if ($cmdArgs.Count -eq 0) {
   $cmdArgs = @("start")
 }
 
-$cmd = $cmdArgs[0]
+$cmd = if ($cmdArgs.Count -gt 0) { $cmdArgs[0] } else { "start" }
 switch ($cmd) {
   "start" { Start-Forge }
   "stop" { Stop-Forge }
