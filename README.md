@@ -1,167 +1,44 @@
 # faustforge
-Docker-first web UI + MCP server for Faust prototyping, featuring an Orbit UI for expressive multi-parameter exploration and tight AI-in-the-loop iteration.
 
-## Quick Start (Docker)
+FaustForge is a web-based environment for prototyping audio applications with [Faust](https://faust.grame.fr), a functional programming language for real-time audio signal processing. It also acts as an MCP server, letting an AI assistant write, compile, run, and evaluate Faust code autonomously alongside the user.
 
-Prerequisite: Docker installed and running.
+It runs entirely in Docker -- nothing to install on your machine except Docker itself.
 
-### 0) One-line installer (recommended)
+[![License](https://img.shields.io/github/license/orlarey/faustforge)](LICENSE)
+[![Container](https://img.shields.io/badge/ghcr-faustforge-2496ED?logo=docker&logoColor=white)](https://github.com/orlarey/faustforge/pkgs/container/faustforge)
 
-This command creates a local `./ff` launcher in the current directory, starts faustforge, and opens `http://localhost:3000`.
+## Quick Start
 
-macOS/Linux (`curl`):
+**Prerequisite:** Docker installed and running ([Linux](https://docs.docker.com/engine/install/) | [macOS](https://docs.docker.com/desktop/setup/install/mac-install/) | [Windows](https://docs.docker.com/desktop/setup/install/windows-install/)).
+
+### Install
+
+**macOS / Linux:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/orlarey/faustforge/main/scripts/install.sh | bash
 ```
 
-macOS/Linux (`wget`):
-
-```bash
-wget -qO- https://raw.githubusercontent.com/orlarey/faustforge/main/scripts/install.sh | bash
-```
-
-Windows (PowerShell):
+**Windows (PowerShell):**
 
 ```powershell
 irm https://raw.githubusercontent.com/orlarey/faustforge/main/scripts/install.ps1 | iex
 ```
 
-Windows security best practice (inspect before execution):
+This creates a local launcher (`./ff` on macOS/Linux, `.\ff.ps1` on Windows), pulls the Docker image, starts FaustForge, and opens your browser to `http://localhost:3000`. See the [User Manual](#user-manual) below for a guided walkthrough.
 
-```powershell
-irm https://raw.githubusercontent.com/orlarey/faustforge/main/scripts/install.ps1 -OutFile .\install.ps1
-notepad .\install.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-After installation, use:
+### Launcher commands
 
 ```bash
-./ff             # equivalent to "./ff ." and "./ff start ."
-./ff .           # start with current directory as workspace
-./ff start .     # same, explicit start
-./ff help
-./ff status
-./ff logs
-./ff stop
-./ff update
+./ff              # start FaustForge (current directory as workspace)
+./ff stop         # stop the container
+./ff update       # pull the latest image and restart
+./ff status       # show container status
+./ff logs         # show container logs
+./ff help         # list all commands
 ```
 
-Windows equivalents:
-
-```powershell
-.\ff.ps1             # equivalent to ".\ff.ps1 ." and ".\ff.ps1 start ."
-.\ff.ps1 .           
-.\ff.ps1 start .
-.\ff.ps1 help
-.\ff.ps1 status
-.\ff.ps1 logs
-.\ff.ps1 stop
-.\ff.ps1 update
-```
-
-### 1) Run the container (standard mode)
-
-```bash
-docker run -d \
-  --name faustforge \
-  -p 3000:3000 \
-  -v "$HOME/.faustforge/sessions:/app/sessions" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e SESSIONS_DIR=/app/sessions \
-  -e HOST_SESSIONS_DIR="$HOME/.faustforge/sessions" \
-  -e FAUST_HTTP_URL=http://localhost:3000 \
-  ghcr.io/orlarey/faustforge:latest
-```
-
-`docker run` pulls the image automatically if it is not present locally.
-To force the latest image: `docker pull ghcr.io/orlarey/faustforge:latest` (or `docker run --pull always ...` if supported).
-
-Then open:
-
-```text
-http://localhost:3000
-```
-
-Notes:
-- Sessions are persisted in `~/.faustforge/sessions`.
-- `SESSIONS_DIR` is the in-container path used by faustforge for session storage. It must match the container side of the sessions volume mount (`/app/sessions`).
-- `FAUST_HTTP_URL` is the base HTTP URL used by internal components (including MCP in the container) to call the faustforge API.
-- `/var/run/docker.sock` is required because the app launches the Faust Docker image for C++ compilation.
-- `HOST_SESSIONS_DIR` must point to the host path of sessions so nested Docker mounts resolve correctly.
-
-### 2) Run the container (live workspace mode)
-
-Use this mode if you want:
-- automatic recompilation when `.dsp` files change on disk
-- automatic switch to newly discovered `.dsp` files (same behavior as dropping a file in the UI)
-
-```bash
-docker run -d \
-  --name faustforge \
-  -p 3000:3000 \
-  -v "$HOME/.faustforge/sessions:/app/sessions" \
-  -v "$HOME/faust-workspace:/workspace" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e SESSIONS_DIR=/app/sessions \
-  -e HOST_SESSIONS_DIR="$HOME/.faustforge/sessions" \
-  -e FAUST_HTTP_URL=http://localhost:3000 \
-  -e LIVE_AUTO_DISCOVER=1 \
-  -e LIVE_WORKSPACE_ROOT=/workspace \
-  -e HOST_LIVE_WORKSPACE_ROOT="$HOME/faust-workspace" \
-  -e LIVE_SCAN_INTERVAL_MS=1500 \
-  ghcr.io/orlarey/faustforge:latest
-```
-
-Then open:
-
-```text
-http://localhost:3000
-```
-
-In this setup, `.dsp` files under the mounted workspace are discovered automatically.
-When a `.dsp` file appears or is modified, it is auto-opened and becomes the active session.
-This matches the helper script default workspace path: `$HOME/faust-workspace`.
-
-Notes:
-- `LIVE_AUTO_DISCOVER=1` enables periodic scan of `.dsp` files under `LIVE_WORKSPACE_ROOT`.
-- `LIVE_WORKSPACE_ROOT` must match the container side of the workspace mount (`/workspace` in this example).
-- `LIVE_SCAN_INTERVAL_MS` controls detection/refresh latency (default `1500` ms).
-- Use `LIVE_AUTO_DISCOVER=0` to disable live workspace behavior.
-
-Optional overrides:
-
-```bash
-docker run -d \
-  --name faustforge-dev \
-  -p 3001:3000 \
-  -v "$HOME/.faustforge-dev/sessions:/app/sessions" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e SESSIONS_DIR=/app/sessions \
-  -e HOST_SESSIONS_DIR="$HOME/.faustforge-dev/sessions" \
-  -e FAUST_HTTP_URL=http://localhost:3001 \
-  ghcr.io/orlarey/faustforge:latest
-```
-
-### 3) Windows (PowerShell, standard mode)
-
-```powershell
-$sessions = "$env:USERPROFILE\.faustforge\sessions"
-New-Item -ItemType Directory -Force -Path $sessions | Out-Null
-
-docker run -d `
-  --name faustforge `
-  -p 3000:3000 `
-  -v "${sessions}:/app/sessions" `
-  -v /var/run/docker.sock:/var/run/docker.sock `
-  -e SESSIONS_DIR=/app/sessions `
-  -e HOST_SESSIONS_DIR="$sessions" `
-  -e FAUST_HTTP_URL=http://localhost:3000 `
-  ghcr.io/orlarey/faustforge:latest
-```
-
-Then open `http://localhost:3000`.
+On Windows, replace `./ff` with `.\ff.ps1`.
 
 ## User Manual
 
@@ -307,6 +184,99 @@ If SVG rendering fails (typically because the graph is too large), faustforge di
 - **Edit** (`✎`, static sessions only): copies the static source into the live shared workspace root and opens the host editor URL when available (for example `vscode://file/...`).
 - **Archive**: downloads all sessions as a single `.tar.gz` archive. This is useful for backing up your work or transferring sessions to another machine.
 
+## Advanced Setup
+
+These sections are for users who want fine-grained control over the Docker container, or need specific configurations like live workspace mode.
+
+### Docker run (standard mode)
+
+```bash
+docker run -d \
+  --name faustforge \
+  -p 3000:3000 \
+  -v "$HOME/.faustforge/sessions:/app/sessions" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e SESSIONS_DIR=/app/sessions \
+  -e HOST_SESSIONS_DIR="$HOME/.faustforge/sessions" \
+  -e FAUST_HTTP_URL=http://localhost:3000 \
+  ghcr.io/orlarey/faustforge:latest
+```
+
+Then open `http://localhost:3000`.
+
+To force-pull the latest image before starting: `docker pull ghcr.io/orlarey/faustforge:latest`.
+
+Notes:
+- Sessions are persisted in `~/.faustforge/sessions`.
+- `SESSIONS_DIR` is the in-container path for session storage. It must match the container side of the volume mount (`/app/sessions`).
+- `FAUST_HTTP_URL` is the base URL used by internal components (including MCP) to reach the FaustForge API.
+- `/var/run/docker.sock` is required because FaustForge launches the Faust Docker image for C++ compilation.
+- `HOST_SESSIONS_DIR` must point to the host path of sessions so nested Docker mounts resolve correctly.
+
+### Docker run (live workspace mode)
+
+Mount a host folder into the container to get:
+- automatic recompilation when `.dsp` files change on disk
+- automatic switch to newly discovered `.dsp` files
+- editing Faust files with your usual local tools (VS Code, terminal editor, scripts)
+- a continuous local-edit + browser-run workflow
+
+```bash
+docker run -d \
+  --name faustforge \
+  -p 3000:3000 \
+  -v "$HOME/.faustforge/sessions:/app/sessions" \
+  -v "$HOME/faust-workspace:/workspace" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e SESSIONS_DIR=/app/sessions \
+  -e HOST_SESSIONS_DIR="$HOME/.faustforge/sessions" \
+  -e FAUST_HTTP_URL=http://localhost:3000 \
+  -e LIVE_AUTO_DISCOVER=1 \
+  -e LIVE_WORKSPACE_ROOT=/workspace \
+  -e HOST_LIVE_WORKSPACE_ROOT="$HOME/faust-workspace" \
+  -e LIVE_SCAN_INTERVAL_MS=1500 \
+  ghcr.io/orlarey/faustforge:latest
+```
+
+Notes:
+- `LIVE_AUTO_DISCOVER=1` enables periodic scan of `.dsp` files under `LIVE_WORKSPACE_ROOT`.
+- `LIVE_WORKSPACE_ROOT` must match the container side of the workspace mount (`/workspace` in this example).
+- `LIVE_SCAN_INTERVAL_MS` controls detection/refresh latency (default `1500` ms).
+- Use `LIVE_AUTO_DISCOVER=0` to disable live workspace behavior.
+
+### Windows (PowerShell, manual)
+
+```powershell
+$sessions = "$env:USERPROFILE\.faustforge\sessions"
+New-Item -ItemType Directory -Force -Path $sessions | Out-Null
+
+docker run -d `
+  --name faustforge `
+  -p 3000:3000 `
+  -v "${sessions}:/app/sessions" `
+  -v /var/run/docker.sock:/var/run/docker.sock `
+  -e SESSIONS_DIR=/app/sessions `
+  -e HOST_SESSIONS_DIR="$sessions" `
+  -e FAUST_HTTP_URL=http://localhost:3000 `
+  ghcr.io/orlarey/faustforge:latest
+```
+
+Then open `http://localhost:3000`.
+
+### Custom port / multiple instances
+
+```bash
+docker run -d \
+  --name faustforge-dev \
+  -p 3001:3000 \
+  -v "$HOME/.faustforge-dev/sessions:/app/sessions" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e SESSIONS_DIR=/app/sessions \
+  -e HOST_SESSIONS_DIR="$HOME/.faustforge-dev/sessions" \
+  -e FAUST_HTTP_URL=http://localhost:3001 \
+  ghcr.io/orlarey/faustforge:latest
+```
+
 ## Build Locally (Maintainers)
 
 ### 1) Build the local image
@@ -337,27 +307,6 @@ You can still use the raw scripts directly:
 - `./scripts/rebuild.sh`
 - `./scripts/run.sh`
 - `./scripts/stop.sh`
-
-### Optional: Live workspace mode in Docker
-
-To auto-create/update live sessions from files saved in a mounted workspace:
-
-```bash
-docker run -d \
-  --name faustforge \
-  -p 3000:3000 \
-  -v "$HOME/.faustforge/sessions:/app/sessions" \
-  -v "$HOME/faust-workspace:/workspace" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e SESSIONS_DIR=/app/sessions \
-  -e HOST_SESSIONS_DIR="$HOME/.faustforge/sessions" \
-  -e FAUST_HTTP_URL=http://localhost:3000 \
-  -e LIVE_AUTO_DISCOVER=1 \
-  -e LIVE_WORKSPACE_ROOT=/workspace \
-  -e HOST_LIVE_WORKSPACE_ROOT="$HOME/faust-workspace" \
-  -e LIVE_SCAN_INTERVAL_MS=1500 \
-  faustforge:latest
-```
 
 ## Claude Desktop MCP Setup
 
