@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Purpose: Install a local `./ff` launcher in current directory and boot faustforge.
+# How: Writes an executable shell script, starts dockerized faustforge, and opens localhost UI.
+
+TARGET_DIR="${PWD}"
+TARGET_FILE="${TARGET_DIR}/ff"
+
+if [[ -f "${TARGET_FILE}" ]]; then
+  echo "Replacing existing ${TARGET_FILE}"
+fi
+
+cat > "${TARGET_FILE}" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+IMAGE="${FF_IMAGE:-ghcr.io/orlarey/faustforge:latest}"
+NAME="${FF_NAME:-faustforge}"
+PORT="${FF_PORT:-3000}"
+SESSIONS_DIR="${FF_SESSIONS_DIR:-$HOME/.faustforge/sessions}"
+WORKSPACE_DIR="${FF_WORKSPACE_DIR:-$HOME/faust-workspace}"
+LIVE_AUTO_DISCOVER="${FF_LIVE_AUTO_DISCOVER:-1}"
+LIVE_SCAN_INTERVAL_MS="${FF_LIVE_SCAN_INTERVAL_MS:-1500}"
+LIVE_IGNORE_DIRS="${FF_LIVE_IGNORE_DIRS:-}"
+MAX_SESSIONS="${FF_MAX_SESSIONS:-0}"
+URL="http://localhost:${PORT}"
+WORKSPACE_TRACK_FILE="${SESSIONS_DIR}/.ff-workspace"
+
+usage() {
+  cat <<EOH
+faustforge launcher (ff)
+
+Usage:
+  ./ff
+  ./ff [workspace]
+  ./ff [workspace] [command]
+  ./ff start [workspace]
+  ./ff --workspace <dir> [command]
+  ./ff stop | restart | update | logs | status | open | reset | help
+EOH
+}
+
+ensure_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Error: docker is not installed or not in PATH." >&2
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "Error: docker is not running." >&2
+    exit 1
+  fi
+}
+
+container_exists() { docker ps -a --format '{{.Names}}' | grep -Fxq "$NAME"; }
+container_running() { docker ps --format '{{.Names}}' | grep -Fxq "$NAME"; }
+container_workspace_mount() { docker inspect -f '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' "$NAME" 2>/dev/null || true; }
+container_sessions_mount() { docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/sessions"}}{{.Source}}{{end}}{{end}}' "$NAME" 2>/dev/null || true; }
+container_host_port() { docker inspect -f '{{(index (index .HostConfig.PortBindings "3000/tcp") 0).HostPort}}' "$NAME" 2>/dev/null || true; }
+container_image() { docker inspect -f '{{.Config.Image}}' "$NAME" 2>/dev/null || true; }
+
+realign_live_sessions() {
+  if [[ "$LIVE_AUTO_DISCOVER" != "1" ]]; then
+    return
+  fi
+  echo "Aligning live sessions with workspace: $WORKSPACE_DIR"
+  find "$SESSIONS_DIR" -mindepth 1 -maxdepth 1 -name 'live-*' -exec rm -rf {} +
+}
+
+track_workspace_change() {
+  local previous=""
+  if [[ -f "$WORKSPACE_TRACK_FILE" ]]; then
+    previous="$(cat "$WORKSPACE_TRACK_FILE" 2>/dev/null || true)"
+  fi
+  if [[ -n "$previous" && "$previous" != "$WORKSPACE_DIR" ]]; then
+    echo "Workspace changed:"
+    echo "  previous: $previous"
+    echo "  current : $WORKSPACE_DIR"
+    echo "Live sessions will be realigned from workspace scan."
+  fi
+  printf '%s\n' "$WORKSPACE_DIR" > "$WORKSPACE_TRACK_FILE"
+}
+
+open_url() {
+  if command -v open >/dev/null 2>&1; then
+    open "$URL" >/dev/null 2>&1 || true
+    return
+  fi
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$URL" >/dev/null 2>&1 || true
+  fi
+}
+
+start() {
+  ensure_docker
+  mkdir -p "$SESSIONS_DIR" "$WORKSPACE_DIR"
+  track_workspace_change
+  realign_live_sessions
+  echo "Workspace: $WORKSPACE_DIR"
+  echo "Sessions : $SESSIONS_DIR"
+  echo "URL      : $URL"
+  if container_exists; then
+    local mounted_workspace mounted_sessions mounted_port mounted_image
+    mounted_workspace="$(container_workspace_mount)"
+    mounted_sessions="$(container_sessions_mount)"
+    mounted_port="$(container_host_port)"
+    mounted_image="$(container_image)"
+    if [[ "$mounted_workspace" != "$WORKSPACE_DIR" || "$mounted_sessions" != "$SESSIONS_DIR" || "$mounted_port" != "$PORT" || "$mounted_image" != "$IMAGE" ]]; then
+      echo "Configuration changed. Recreating container '$NAME'."
+      docker rm -f "$NAME" >/dev/null
+    elif container_running; then
+      if [[ "$LIVE_AUTO_DISCOVER" == "1" ]]; then
+        echo "Container already running. Restarting to rescan workspace."
+        docker restart "$NAME" >/dev/null
+        echo "faustforge started: $URL"
+        return
+      else
+        echo "faustforge is already running: $URL"
+        return
+      fi
+    else
+      docker start "$NAME" >/dev/null
+      echo "faustforge started: $URL"
+      return
+    fi
+  fi
+  docker run -d \
+    --name "$NAME" \
+    -p "${PORT}:3000" \
+    -v "${SESSIONS_DIR}:/app/sessions" \
+    -v "${WORKSPACE_DIR}:/workspace" \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -e SESSIONS_DIR=/app/sessions \
+    -e HOST_SESSIONS_DIR="${SESSIONS_DIR}" \
+    -e FAUST_HTTP_URL="${URL}" \
+    -e LIVE_AUTO_DISCOVER="${LIVE_AUTO_DISCOVER}" \
+    -e LIVE_WORKSPACE_ROOT=/workspace \
+    -e HOST_LIVE_WORKSPACE_ROOT="${WORKSPACE_DIR}" \
+    -e LIVE_SCAN_INTERVAL_MS="${LIVE_SCAN_INTERVAL_MS}" \
+    -e LIVE_IGNORE_DIRS="${LIVE_IGNORE_DIRS}" \
+    -e MAX_SESSIONS="${MAX_SESSIONS}" \
+    "$IMAGE" >/dev/null
+  echo "faustforge started: $URL"
+}
+
+stop() {
+  ensure_docker
+  if ! container_exists; then
+    echo "No container named '$NAME'."
+    return
+  fi
+  docker rm -f "$NAME" >/dev/null
+  echo "faustforge stopped."
+}
+
+restart() { stop || true; start; }
+
+update() {
+  ensure_docker
+  echo "Pulling latest image: $IMAGE"
+  docker pull "$IMAGE"
+  restart
+}
+
+logs() { ensure_docker; docker logs -f "$NAME"; }
+status() { ensure_docker; docker ps -a --filter "name=^/${NAME}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'; }
+
+reset() {
+  ensure_docker
+  read -r -p "Delete container and sessions in '${SESSIONS_DIR}'? [y/N] " answer
+  case "${answer}" in
+    y|Y|yes|YES)
+      if container_exists; then
+        docker rm -f "$NAME" >/dev/null
+      fi
+      rm -rf "$SESSIONS_DIR"
+      mkdir -p "$SESSIONS_DIR"
+      echo "faustforge reset complete."
+      ;;
+    *)
+      echo "Canceled."
+      ;;
+  esac
+}
+
+if [[ "${1:-}" == "--workspace" ]]; then
+  if [[ -z "${2:-}" ]]; then
+    echo "Error: --workspace expects a directory path." >&2
+    exit 1
+  fi
+  WORKSPACE_DIR="$(cd "$2" && pwd)"
+  shift 2
+fi
+
+if [[ "${1:-}" == "start" && -n "${2:-}" && -d "${2:-}" ]]; then
+  WORKSPACE_DIR="$(cd "$2" && pwd)"
+  shift 2
+  set -- start "$@"
+fi
+
+if [[ -n "${1:-}" && -d "${1:-}" ]]; then
+  WORKSPACE_DIR="$(cd "$1" && pwd)"
+  shift
+  set -- start "$@"
+fi
+
+if [[ -z "${1:-}" ]]; then
+  WORKSPACE_DIR="$(pwd)"
+  set -- start
+fi
+
+cmd="${1:-start}"
+case "$cmd" in
+  start) start ;;
+  stop) stop ;;
+  restart) restart ;;
+  update) update ;;
+  logs) logs ;;
+  status) status ;;
+  open) open_url ;;
+  reset) reset ;;
+  help|-h|--help) usage ;;
+  *) echo "Unknown command: $cmd" >&2; usage; exit 1 ;;
+esac
+EOF
+
+chmod +x "${TARGET_FILE}"
+echo "Installed ${TARGET_FILE}"
+
+"${TARGET_FILE}" start
+"${TARGET_FILE}" open || true
+
+echo "Done. Use './ff help' for commands."

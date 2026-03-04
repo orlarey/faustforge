@@ -5,6 +5,62 @@ Docker-first web UI + MCP server for Faust prototyping, featuring an Orbit UI fo
 
 Prerequisite: Docker installed and running.
 
+### 0) One-line installer (recommended)
+
+This command creates a local `./ff` launcher in the current directory, starts faustforge, and opens `http://localhost:3000`.
+
+macOS/Linux (`curl`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/orlarey/faustforge/main/scripts/install.sh | bash
+```
+
+macOS/Linux (`wget`):
+
+```bash
+wget -qO- https://raw.githubusercontent.com/orlarey/faustforge/main/scripts/install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/orlarey/faustforge/main/scripts/install.ps1 | iex
+```
+
+Windows security best practice (inspect before execution):
+
+```powershell
+irm https://raw.githubusercontent.com/orlarey/faustforge/main/scripts/install.ps1 -OutFile .\install.ps1
+notepad .\install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+After installation, use:
+
+```bash
+./ff             # equivalent to "./ff ." and "./ff start ."
+./ff .           # start with current directory as workspace
+./ff start .     # same, explicit start
+./ff help
+./ff status
+./ff logs
+./ff stop
+./ff update
+```
+
+Windows equivalents:
+
+```powershell
+.\ff.ps1             # equivalent to ".\ff.ps1 ." and ".\ff.ps1 start ."
+.\ff.ps1 .           
+.\ff.ps1 start .
+.\ff.ps1 help
+.\ff.ps1 status
+.\ff.ps1 logs
+.\ff.ps1 stop
+.\ff.ps1 update
+```
+
 ### 1) Run the container (standard mode)
 
 ```bash
