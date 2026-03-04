@@ -1,6 +1,6 @@
 {
   "name": "faustforge",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Service Faust dual Web/MCP",
   "main": "dist/index.js",
   "scripts": {
