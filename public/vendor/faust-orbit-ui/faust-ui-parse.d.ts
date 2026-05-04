@@ -2,6 +2,10 @@ export type FaustInputWidgetType = 'hslider' | 'vslider' | 'nentry' | 'button' |
 export type FaustPassiveWidgetType = 'hbargraph' | 'vbargraph';
 export type FaustWidgetType = FaustInputWidgetType | FaustPassiveWidgetType;
 export type FaustGroupType = 'vgroup' | 'hgroup' | 'tgroup';
+export type FaustMenuEntry = {
+    label: string;
+    value: number;
+};
 export type FaustUIItem = {
     path: string;
     type: FaustWidgetType;
@@ -9,6 +13,9 @@ export type FaustUIItem = {
     min: number;
     max: number;
     step: number;
+    unit?: string;
+    menu?: FaustMenuEntry[];
+    menuStyle?: 'menu' | 'radio';
 };
 export type FaustUiAstGroupNode = {
     kind: 'group';

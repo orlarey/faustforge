@@ -2,7 +2,7 @@
  * Purpose: Define the Run view runtime for real-time Faust execution.
  * How: Compiles DSP to WebAudio, manages UI/MIDI/orbit interactions, and synchronizes run state locally and remotely.
  */
-import { FaustOrbitUI } from '../vendor/faust-orbit-ui/faust-orbit-ui.js';
+import { OrbitUI } from '../vendor/faust-orbit-ui/index.js';
 import { TOOLTIP_TEXTS } from '../tooltip-texts.js';
 import {
   MAX_COMPILED_RUN_CACHE,
@@ -1532,9 +1532,9 @@ function renderOrbitUi(container, ui) {
     orbitUiInstance = null;
   }
 
-  orbitUiInstance = new FaustOrbitUI(
-    container,
-    (path, value) => {
+  orbitUiInstance = new OrbitUI(container, {
+    uiDescriptor: ui,
+    onParamChange: (path, value) => {
       const isButton = uiButtonPaths.has(path);
       setParamValue(path, value, {
         smooth: !isButton,
@@ -1555,25 +1555,23 @@ function renderOrbitUi(container, ui) {
       }
       if (emitRunStateFn) emitRunStateFn();
     },
-    {
-      tooltips: TOOLTIP_TEXTS.orbit,
-      onInteractionStart: () => {
-        orbitUiBatchDepth += 1;
-      },
-      onInteractionEnd: () => {
-        orbitUiBatchDepth = Math.max(0, orbitUiBatchDepth - 1);
-        if (orbitUiBatchDepth === 0 && orbitUiBatchSnapshotPending) {
-          orbitUiBatchSnapshotPending = false;
-          orbitUiBatchLastSentAt = Date.now();
-          sendRunParamsSnapshot(true);
-        }
-      },
-      onOrbitStateChange: (state) => {
-        orbitZoom = String(Math.round(state.zoom));
-        if (emitRunStateFn) emitRunStateFn();
+    tooltips: TOOLTIP_TEXTS.orbit,
+    onInteractionStart: () => {
+      orbitUiBatchDepth += 1;
+    },
+    onInteractionEnd: () => {
+      orbitUiBatchDepth = Math.max(0, orbitUiBatchDepth - 1);
+      if (orbitUiBatchDepth === 0 && orbitUiBatchSnapshotPending) {
+        orbitUiBatchSnapshotPending = false;
+        orbitUiBatchLastSentAt = Date.now();
+        sendRunParamsSnapshot(true);
       }
+    },
+    onOrbitStateChange: (state) => {
+      orbitZoom = String(Math.round(state.zoom));
+      if (emitRunStateFn) emitRunStateFn();
     }
-  );
+  });
 
   // Ensure geometry is initialized before restoring remote state.
   orbitUiInstance.resize();

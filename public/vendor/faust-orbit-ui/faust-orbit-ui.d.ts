@@ -1,5 +1,5 @@
 import { FaustUICore, type ParamChangeByUI, type ParamValue, type Path } from './faust-core-ui.js';
-import { type FaustUIItem, type FaustInputWidgetType } from './faust-ui-parse.js';
+import { type FaustUIItem, type FaustInputWidgetType, type FaustMenuEntry } from './faust-ui-parse.js';
 export type OrbitWidgetType = FaustInputWidgetType;
 export type OrbitControl = {
     path: Path;
@@ -8,6 +8,9 @@ export type OrbitControl = {
     min: number;
     max: number;
     step: number;
+    unit?: string;
+    menu?: FaustMenuEntry[];
+    menuStyle?: 'menu' | 'radio';
     color: string;
     x: number;
     y: number;
@@ -74,9 +77,14 @@ export declare class FaustOrbitUI extends FaustUICore {
     private hoverHint;
     private tooltips;
     private state;
-    private body;
+    private activePath;
+    /** Root scrollable body containing the canvas. Public so the OrbitUI
+     *  wrapper (and embedding hosts that have a reference to the wrapped
+     *  inner instance) can measure it for layout-recovery routines. */
+    readonly body: HTMLDivElement;
     private canvas;
     private ctx;
+    private detailEl;
     private zoomSelect;
     private centerButton;
     private randomButton;
@@ -89,6 +97,7 @@ export declare class FaustOrbitUI extends FaustUICore {
     getState(): OrbitState;
     setState(state: OrbitState): void;
     getOrbitState(): OrbitState;
+    getParamValues(): Record<Path, ParamValue>;
     setOrbitState(state: OrbitState): void;
     setOrbitStateFromUnknown(input: unknown): void;
     buildControls(ui: FaustUIItem[]): OrbitState;
@@ -137,6 +146,13 @@ export declare class FaustOrbitUI extends FaustUICore {
     _emitValueForControl(control: OrbitControl): void;
     _emitValuesForAllControls(): void;
     _drawNow(): void;
+    _setActivePath(path: Path | null): void;
+    _navigateControl(direction: 1 | -1): void;
+    _stepActiveControl(direction: 1 | -1): void;
+    _spaceActiveControl(down: boolean): void;
+    private _applyDetailValue;
+    _updateDetailPanel(): void;
+    private _formatValue;
     _warn(code: string, details: unknown): void;
 }
 export {};

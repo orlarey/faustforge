@@ -16,6 +16,20 @@ export function isFaustInputWidgetType(type) {
 function isFaustGroupType(type) {
     return type === 'vgroup' || type === 'hgroup' || type === 'tgroup';
 }
+// Parses a Faust menu/radio style string like "menu{'Noise':0;'Sawtooth':1;'Square':2}".
+function parseMenuStyle(style) {
+    const match = style.match(/^(menu|radio)\s*\{(.+)\}$/);
+    if (!match)
+        return undefined;
+    const menuStyle = match[1];
+    const entries = [];
+    for (const pair of match[2].split(';')) {
+        const m = pair.match(/^\s*'([^']+)'\s*:\s*(-?[\d.]+)\s*$/);
+        if (m)
+            entries.push({ label: m[1], value: Number(m[2]) });
+    }
+    return entries.length > 0 ? { entries, menuStyle } : undefined;
+}
 function parseControlNode(node, type) {
     const rawPath = typeof node.address === 'string'
         ? node.address
@@ -38,6 +52,26 @@ function parseControlNode(node, type) {
     const label = typeof node.label === 'string' && node.label.trim()
         ? node.label
         : rawPath.split('/').filter(Boolean).pop() || rawPath;
+    // Extract optional unit and menu style from widget metadata array.
+    let unit;
+    let menu;
+    let menuStyle;
+    if (Array.isArray(node.meta)) {
+        for (const entry of node.meta) {
+            if (!isRecord(entry))
+                continue;
+            if (typeof entry.unit === 'string') {
+                unit = entry.unit;
+            }
+            if (typeof entry.style === 'string') {
+                const parsed = parseMenuStyle(entry.style);
+                if (parsed) {
+                    menu = parsed.entries;
+                    menuStyle = parsed.menuStyle;
+                }
+            }
+        }
+    }
     return {
         kind: 'control',
         item: {
@@ -46,7 +80,10 @@ function parseControlNode(node, type) {
             label,
             min,
             max,
-            step
+            step,
+            ...(unit !== undefined ? { unit } : {}),
+            ...(menu !== undefined ? { menu } : {}),
+            ...(menuStyle !== undefined ? { menuStyle } : {})
         }
     };
 }

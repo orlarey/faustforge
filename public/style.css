@@ -2843,7 +2843,14 @@ footer > * {
 .orbit-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  /* `hidden`, not `auto`: the canvas is sized programmatically to match
+     the body's clientWidth/clientHeight on every observer tick. With
+     `overflow: auto`, a transient overflow during a render cycle
+     spawns a scrollbar (~15px) which shrinks clientWidth, triggers a
+     new observer tick, the canvas shrinks to fit, the scrollbar
+     vanishes, and the loop restarts — visible as flickering bars
+     during parameter drags (faust-orbit-ui v0.3.0+). */
+  overflow: hidden;
 }
 
 .regular-header {
