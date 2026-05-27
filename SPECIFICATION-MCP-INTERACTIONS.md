@@ -146,30 +146,13 @@ The AI should flag severe clipping and click risk unless the user explicitly acc
 
 The full power of MCP interaction emerges when both axes are used together in a design loop:
 
-```text
-    ┌─────────────────────────────────────────┐
-    │                                         │
-    │  ┌─────────┐    ┌──────────┐            │
-    │  │  WRITE   │───▶│  SUBMIT  │            │
-    │  │  code    │    │  + check │            │
-    │  └─────────┘    └────┬─────┘            │
-    │                      │                  │
-    │                 ┌────▼─────┐            │
-    │                 │  LISTEN   │            │
-    │                 │  spectrum │            │
-    │                 └────┬─────┘            │
-    │                      │                  │
-    │                 ┌────▼─────┐            │
-    │                 │  TWEAK    │            │
-    │                 │  params   │────────────┘
-    │                 └────┬─────┘
-    │                      │
-    │                 ┌────▼─────┐
-    │                 │ EVALUATE  │
-    │                 │ quality   │
-    │                 └──────────┘
-    │
-    └── iterate if needed
+```mermaid
+flowchart TD
+  W[WRITE code] --> S[SUBMIT + check]
+  S --> L[LISTEN spectrum]
+  L --> T[TWEAK params]
+  T --> E[EVALUATE quality]
+  E -.iterate.-> W
 ```
 
 ### 4.1) Example: designing a filter
