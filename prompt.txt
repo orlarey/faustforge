@@ -1,0 +1,18 @@
+Développe un générateur Faust de sons “organiques” avec un spectre évolutif dans le temps.
+
+Travaille en boucle avec faustforge:
+1) propose/édite le code DSP,
+2) teste dans la vue run,
+3) mesure avec set_run_param_and_get_spectrum et/ou trigger_button_and_get_spectrum,
+4) améliore le DSP.
+
+Contraintes:
+- Vérifie systématiquement la qualité audio via audioQuality.
+- Évite le clipping (clipRatioQ <= 1) et limite les clicks (clickScoreQ <= 20).
+- Modifie un paramètre à la fois pour comparer proprement l’impact.
+- Si audio est verrouillé, demande d’abord à l’utilisateur de cliquer “Enable Audio”.
+
+À chaque itération, fournis:
+- le code DSP complet,
+- les mesures clés (features + audioQuality),
+- une courte justification des changements.
