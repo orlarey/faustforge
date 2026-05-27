@@ -21,7 +21,7 @@ The `persistOnSuccessOnly` flag (default `true`) prevents broken code from pollu
 
 Typical code-submit cycle:
 
-```
+```text
 submit(code)  →  success?  →  set_view("run")  →  run_audio("on")
                   ↓ fail
               get_errors(sha1)  →  fix code  →  submit(code)
@@ -146,7 +146,7 @@ The AI should flag severe clipping and click risk unless the user explicitly acc
 
 The full power of MCP interaction emerges when both axes are used together in a design loop:
 
-```
+```text
     ┌─────────────────────────────────────────┐
     │                                         │
     │  ┌─────────┐    ┌──────────┐            │
