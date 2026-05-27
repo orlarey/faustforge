@@ -8,7 +8,12 @@
       "Bash(lsof -ti:3000)",
       "Bash(xargs kill -9)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(grep -v '\\\\$')",
+      "Bash(grep -nE '^```$' SPECIFICATION-MCP-INTERACTIONS.md)"
     ]
   }
 }
