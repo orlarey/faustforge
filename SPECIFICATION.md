@@ -178,12 +178,12 @@ Configuration MCP (extrait) :
 
 ### Types primitifs
 
-```text
-SHA1     = String[40]         -- empreinte hexadécimale
-Code     = String             -- code source Faust (UTF-8)
-Path     = String             -- chemin relatif dans la session
-Bytes    = ByteArray          -- données binaires
-View     = "dsp" | "svg" | "run" | "cpp" | "tasks" | "signals"
+```adt
+SHA1  ::= String[40]                                              (* empreinte hexadécimale *)
+Code  ::= String                                                  (* code source Faust, UTF-8 *)
+Path  ::= String                                                  (* chemin relatif dans la session *)
+Bytes ::= ByteArray                                               (* données binaires *)
+View  ::= "dsp" | "svg" | "run" | "cpp" | "tasks" | "signals"
 ```
 
 ### Modèle formel de synchronisation des paramètres Run
@@ -196,27 +196,15 @@ Acteurs:
 
 #### Types
 
-```text
-ParamId    = Path
-Value      = Number
-Timestamp  = Number          -- ms epoch
-UIId       = String
+```adt
+ParamId   ::= Path
+Value     ::= Number
+Timestamp ::= Number                                              (* ms epoch *)
+UIId      ::= String
 
-ParamCell ::= {
-  v : Value,                 -- valeur canonique courante
-  d : Timestamp,             -- date de dernière écriture acceptée
-  owner : UIId | ⊥           -- UI détentrice du contrôle exclusif (⊥ = libre)
-}
-
-DSPState ::= {
-  params : Map<ParamId, ParamCell>
-}
-
-UIState ::= {
-  id     : UIId,
-  params : Map<ParamId, ParamCell>,
-  drag   : Set<ParamId>          -- paramètres localement manipulés
-}
+ParamCell ::= { v: Value, d: Timestamp, owner: UIId | ⊥ }         (* cellule horodatée avec owner exclusif ; ⊥ = libre *)
+DSPState  ::= { params: Map<ParamId, ParamCell> }
+UIState   ::= { id: UIId, params: Map<ParamId, ParamCell>, drag: Set<ParamId> }   (* drag = paramètres localement manipulés *)
 ```
 
 #### Opérations abstraites (sans contrainte de transport)
@@ -318,12 +306,8 @@ Session ::= {
 
 ### Métadonnées de session
 
-```text
-SessionMeta ::= {
-  sha1             : SHA1,
-  filename         : String,
-  compilation_time : Timestamp
-}
+```adt
+SessionMeta ::= { sha1: SHA1, filename: String, compilation_time: Timestamp }
 ```
 
 ---
@@ -446,12 +430,9 @@ Règles UX:
 
 Modèle minimal:
 
-```text
-CppPreset ::= {
-  flags      : String,             -- forme normalisée, identité du preset
-  status     : "valid" | "invalid",
-  lastUsedAt : Number              -- ms epoch
-}
+```adt
+PresetStatus ::= "valid" | "invalid"
+CppPreset    ::= { flags: String, status: PresetStatus, lastUsedAt: Number }   (* flags = forme normalisée, identité du preset ; lastUsedAt en ms epoch *)
 ```
 
 Opération API dédiée:

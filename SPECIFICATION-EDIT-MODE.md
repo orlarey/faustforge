@@ -38,29 +38,18 @@ Permettre une transition explicite **statique -> live éditable** en un clic, sa
 
 ## Types
 
-```text
-SessionId      = SHA1 | LiveId
-LiveId         = "live-" + SHA1
-PathContainer  = String
-PathHost       = String
-EditorKind     = "vscode"
+```adt
+SessionId     ::= SHA1 | LiveId
+LiveId        ::= "live-" + SHA1
+PathContainer ::= String
+PathHost      ::= String
+EditorKind    ::= "vscode"
 
-EditRequest ::= {
-  editor?: EditorKind,          -- défaut: "vscode"
-  openEditor?: Bool             -- défaut: true
-}
-
-EditResponse ::= {
-  sourceSha1: SHA1,
-  liveSha1: LiveId,
-  filename: String,
-  containerPath: PathContainer,
-  hostPath?: PathHost,
-  editorUrl?: String,
-  openEditorRequested: Bool,
-  errors?: String,                    -- log d'analyse/compilation live
-  state?: { sha1: SessionId?, filename: String? }
-}
+EditRequest   ::= { editor?: EditorKind, openEditor?: Bool }                              (* défauts : editor="vscode", openEditor=true *)
+EditResponse  ::= { sourceSha1: SHA1, liveSha1: LiveId, filename: String,
+                    containerPath: PathContainer, hostPath?: PathHost, editorUrl?: String,
+                    openEditorRequested: Bool, errors?: String,
+                    state?: { sha1: SessionId?, filename: String? } }                     (* errors = log d'analyse/compilation live *)
 ```
 
 ## Variables d’environnement

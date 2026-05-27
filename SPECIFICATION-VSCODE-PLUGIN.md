@@ -40,23 +40,14 @@ Hors MVP:
 
 ## Types
 
-```text
-ForgeUrl      = String
-SessionId     = SHA1 | LiveId
-LiveId        = "live-" + SHA1
-View          = "dsp" | "svg" | "run" | "cpp" | "tasks" | "signals"
+```adt
+ForgeUrl        ::= String
+SessionId       ::= SHA1 | LiveId
+LiveId          ::= "live-" + SHA1
+View            ::= "dsp" | "svg" | "run" | "cpp" | "tasks" | "signals"
 
-PluginConfig ::= {
-  forgeUrl: ForgeUrl,
-  autoOpenRunOnBuild: Bool,
-  autoSyncActiveDsp: Bool
-}
-
-ConnectionState ::= {
-  reachable: Bool,
-  appVersion?: String,
-  faustVersion?: String
-}
+PluginConfig    ::= { forgeUrl: ForgeUrl, autoOpenRunOnBuild: Bool, autoSyncActiveDsp: Bool }
+ConnectionState ::= { reachable: Bool, appVersion?: String, faustVersion?: String }
 ```
 
 ## Invariants

@@ -28,17 +28,14 @@ Cette spécification formalise le protocole de synchronisation des paramètres R
 
 ## Types
 
-```text
-Path := String
-Value := Number
-Timestamp := Number   // ms epoch
+```adt
+Path         ::= String
+Value        ::= Number
+Timestamp    ::= Number                          (* ms epoch *)
 
-RunParamCell := {
-  v: Value,
-  d: Timestamp
-}
-RunParamMap := Map<Path, RunParamCell>
-Version := Timestamp
+RunParamCell ::= { v: Value, d: Timestamp }      (* cellule horodatée *)
+RunParamMap  ::= Map<Path, RunParamCell>
+Version      ::= Timestamp
 ```
 
 ## Protocole HUB <-> Adapters
