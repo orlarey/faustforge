@@ -532,7 +532,7 @@ Effets :
 Résultat :
   - sha1 : session courante (null si session vide)
   - filename : nom du fichier source (null si session vide)
-  - view : vue courante (\"dsp\" | \"cpp\" | \"svg\" | \"run\" | \"signals\" | \"tasks\")
+  - view : vue courante ("dsp" | "cpp" | "svg" | "run" | "signals" | "tasks")
 ```
 
 ### MCP‑3b : get_session (session courante)
@@ -568,12 +568,12 @@ Résultat :
   - content : contenu binaire/texte correspondant à la vue
 
 Règles de contenu :
-  - view = \"dsp\" → user_code.dsp (text/plain)
-  - view = \"cpp\" → generated.cpp (text/plain)
-  - view = \"svg\" → process.svg si présent, sinon 1er SVG (image/svg+xml)
-  - view = \"run\" → dernier snapshot de spectre si disponible (application/json)
-  - view = \"signals\" → signals.dot (text/vnd.graphviz)
-  - view = \"tasks\" → tasks.dot (text/vnd.graphviz)
+  - view = "dsp" → user_code.dsp (text/plain)
+  - view = "cpp" → generated.cpp (text/plain)
+  - view = "svg" → process.svg si présent, sinon 1er SVG (image/svg+xml)
+  - view = "run" → dernier snapshot de spectre si disponible (application/json)
+  - view = "signals" → signals.dot (text/vnd.graphviz)
+  - view = "tasks" → tasks.dot (text/vnd.graphviz)
 ```
 
 ### MCP‑5 : set_view (changement de vue)
@@ -582,7 +582,7 @@ Règles de contenu :
 mcp.set_view : (View) → { view: View }
 
 Préconditions :
-  - view ∈ { \"dsp\", \"cpp\", \"svg\", \"run\", \"signals\", \"tasks\" }
+  - view ∈ { "dsp", "cpp", "svg", "run", "signals", "tasks" }
 
 Effets :
   - Met à jour la vue courante côté UI
@@ -654,7 +654,7 @@ Résultat :
 ### MCP‑10 : get_spectrum (contenu spectral courant)
 
 ```text
-mcp.get_spectrum : () → { mime: \"application/json\", content: SpectrumSummary | SpectrumSnapshot }
+mcp.get_spectrum : () → { mime: "application/json", content: SpectrumSummary | SpectrumSnapshot }
 
 Préconditions :
   - Aucune stricte (retourne erreur si aucun snapshot)
@@ -728,7 +728,7 @@ mcp.set_run_param_and_get_spectrum :
       captureMs: Int,
       sampleEveryMs: Int,
       series: List<{ tMs: Int, summary: SpectrumSummary }>,
-      aggregate: { mode: \"max_hold\", summary: SpectrumSummary }
+      aggregate: { mode: "max_hold", summary: SpectrumSummary }
     }
 
 Préconditions :
@@ -736,7 +736,7 @@ Préconditions :
   - path pointe un paramètre continu (slider/nentry/checkbox)
 
 Effets :
-  - Force la vue partagée sur \"run\" avant capture
+  - Force la vue partagée sur "run" avant capture
   - Démarre l’audio si nécessaire
   - Applique set_run_param(path, value)
   - Attend settleMs (défaut 120 ms) pour laisser le DSP se stabiliser
@@ -789,13 +789,13 @@ Notes :
 ### MCP‑14 : run_transport (start/stop/toggle audio)
 
 ```text
-mcp.run_transport : (action: \"start\" | \"stop\" | \"toggle\") → { sha1: SHA1, runTransport: { action, nonce } }
+mcp.run_transport : (action: "start" | "stop" | "toggle") → { sha1: SHA1, runTransport: { action, nonce } }
 
 Préconditions :
   - Une session active en état partagé
 
 Effets :
-  - Force la vue partagée sur \"run\" avant publication de la commande
+  - Force la vue partagée sur "run" avant publication de la commande
   - Publie une commande transport run (avec nonce)
   - La vue run exécute la commande exactement une fois par nonce
 ```
@@ -809,7 +809,7 @@ Préconditions :
   - path pointe un paramètre bouton
 
 Effets :
-  - Force la vue partagée sur \"run\" avant trigger
+  - Force la vue partagée sur "run" avant trigger
   - Démarre l’audio si nécessaire
   - Déclenche un événement runTrigger atomique (press=1, attente, release=0)
 ```
@@ -825,14 +825,14 @@ mcp.trigger_button_and_get_spectrum :
       captureMs: Int,
       sampleEveryMs: Int,
       series: List<{ tMs: Int, summary: SpectrumSummary }>,
-      aggregate: { mode: \"max_hold\", summary: SpectrumSummary }
+      aggregate: { mode: "max_hold", summary: SpectrumSummary }
     }
 
 Préconditions :
   - path pointe un paramètre bouton
 
 Effets :
-  - Force la vue partagée sur \"run\" avant trigger/capture
+  - Force la vue partagée sur "run" avant trigger/capture
   - Démarre l’audio si nécessaire
   - Déclenche runTrigger atomique (press/release)
   - Capture une série temporelle de SpectrumSummary
@@ -846,7 +846,7 @@ But :
 ### MCP‑17 : get_audio_snapshot (compatibilité)
 
 ```text
-mcp.get_audio_snapshot : (duration_ms?: Int, format?: \"wav\" | \"pcm\") → { mime: \"application/json\", content: SpectrumSummary | SpectrumSnapshot }
+mcp.get_audio_snapshot : (duration_ms?: Int, format?: "wav" | "pcm") → { mime: "application/json", content: SpectrumSummary | SpectrumSnapshot }
 
 Préconditions :
   - Aucune stricte (retourne erreur si aucune donnée spectrale)
@@ -864,10 +864,10 @@ Résultat :
 ```text
 Boucle recommandée pour interaction IA :
 
-1) set_view(\"run\")
+1) set_view("run")
 2) get_run_ui()              -- découverte des paths
 3) get_polyphony() / set_polyphony(voices)
-4) run_transport(\"start\")   -- audio ON
+4) run_transport("start")   -- audio ON
 5) set_run_param(...)        -- réglages continus
 6) set_run_param_and_get_spectrum(path, value, settleMs, captureMs)
 7) trigger_button_and_get_spectrum(path, holdMs, captureMs)
