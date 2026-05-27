@@ -227,51 +227,48 @@ messages IPC, HTTP, etc. La spécification est indépendante du transport.
 
 Pour une UI `u`, cycle périodique:
 
-```text
-U1. S := ReadSnapshot()
-
-U2. Merge entrant (DSP -> UI):
-    pour chaque paramètre p:
-      si S.params[p].d > u.params[p].d alors
-        u.params[p] := S.params[p]
-
-U3. Construction du delta sortant (UI -> DSP):
-    updates[p] est émis seulement si:
-      a) u.params[p].d > S.params[p].d
-      b) (S.params[p].owner = ⊥) ou (S.params[p].owner = u.id)
-
-U4. Submit:
-    SubmitDelta(u.id, updates, lockOps)
+```algorithm "Cycle de synchronisation d'une UI u"
+Input: u (état UI courant), lockOps (acquire/release demandés)
+S := ReadSnapshot()                                                          ▷ U1
+for each paramètre p in S.params do                                          ▷ U2 — merge entrant
+  if S.params[p].d > u.params[p].d then
+    u.params[p] := S.params[p]
+  end
+end
+updates := ∅                                                                 ▷ U3 — delta sortant
+for each paramètre p in u.params do
+  if u.params[p].d > S.params[p].d and (S.params[p].owner = ⊥ or S.params[p].owner = u.id) then
+    updates[p] := u.params[p]
+  end
+end
+SubmitDelta(u.id, updates, lockOps)                                          ▷ U4
 ```
 
 #### Règles d’application côté DSP
 
 Pour chaque update `(p, cell)` reçu de `ui` (avec `v = cell.v`, `d = cell.d`):
 
-```text
-D1 (arbitrage lock):
-  accepter seulement si DSP.params[p].owner = ⊥ ou DSP.params[p].owner = ui
-
-D2 (fraîcheur):
-  accepter seulement si d >= DSP.params[p].d
-
-D3 (bornage):
-  v' = clamp(v, min(p), max(p))
-
-D4 (commit):
-  DSP.params[p].v := v'
-  DSP.params[p].d := d
+```algorithm "Application d'un update DSP"
+Input: ui, p, cell (avec v := cell.v, d := cell.d)
+Require: DSP.params[p].owner ∈ {⊥, ui}           ▷ D1 — arbitrage lock
+Require: d ≥ DSP.params[p].d                     ▷ D2 — fraîcheur
+v' := clamp(v, min(p), max(p))                   ▷ D3 — bornage
+DSP.params[p].v := v'                            ▷ D4 — commit
+DSP.params[p].d := d
 ```
 
 Gestion des locks:
 
-```text
-L1: acquire(p) par ui
-    si DSP.params[p].owner = ⊥ ou DSP.params[p].owner = ui,
-    alors DSP.params[p].owner := ui
+```inference (L1: acquire)
+acquire(p) by ui ; DSP.params[p].owner ∈ {⊥, ui}
+---
+DSP.params[p].owner := ui
+```
 
-L2: release(p) par ui
-    si DSP.params[p].owner = ui, alors DSP.params[p].owner := ⊥
+```inference (L2: release)
+release(p) by ui ; DSP.params[p].owner = ui
+---
+DSP.params[p].owner := ⊥
 ```
 
 Pendant qu’un paramètre `p` est locké par `uiA`, toute mise à jour provenant d’une autre

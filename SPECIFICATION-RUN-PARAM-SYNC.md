@@ -407,41 +407,31 @@ mais ne remplace pas ce filtrage normatif.
 
 ### R-6: Réconciliation SYNC (per-path)
 
-À chaque tick backend, SYNC réconcilie chaque `path` indépendamment:
+À chaque tick backend, SYNC réconcilie chaque `path` indépendamment :
 
-```text
-Pour tout path p dans keys(L) ∪ keys(D):
-  si p ∈ L et p ∉ D:
-    D'[p] = L[p]
-  sinon si p ∉ L et p ∈ D:
-    D'[p] = D[p]
-  sinon:
-    D'[p] = L[p] si L[p].time >= D[p].time
-    D'[p] = D[p] si L[p].time <  D[p].time
-```
-
-Puis:
-
-```text
-appliquer via HUB tous les p tels que L[p].value != D'[p].value
-
-si D' != D:
-  POST(D') vers backend
-```
-
-Enfin:
-
-```text
-commit local: L := D'
-avec garde de fraîcheur post-await
-(ne pas écraser une valeur locale plus récente arrivée pendant le tick)
-```
-
-Cas d'égalité:
-
-```text
-si L[p].time == D[p].time et L[p].value != D[p].value:
-  local wins (D'[p] = L[p])
+```algorithm "Réconciliation SYNC à chaque tick"
+Input: L (LocalRunParamMap), D (snapshot backend du tick)
+Output: D' (map réconciliée)
+for each path p in keys(L) ∪ keys(D) do
+  if p ∈ L and p ∉ D then
+    D'[p] := L[p]
+  elif p ∉ L and p ∈ D then
+    D'[p] := D[p]
+  else
+    if L[p].time ≥ D[p].time then           ▷ égalité de timestamp : local wins
+      D'[p] := L[p]
+    else
+      D'[p] := D[p]
+    end
+  end
+end
+for each path p such that L[p].value ≠ D'[p].value do
+  hubIntent(p, D'[p].value)                 ▷ application via HUB
+end
+if D' ≠ D then
+  POST(D') to backend                       ▷ publication conditionnelle
+end
+L := D'                                     ▷ commit local + garde de fraîcheur post-await
 ```
 
 ## Invariants
