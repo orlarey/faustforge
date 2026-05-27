@@ -234,18 +234,23 @@ Le bloc `audioQuality` est optionnel dans `spectrum_summary_v1` (extension backw
 
 Définitions:
 
-- `peakDbFSQ`:
-  - pic temporel de la fenêtre en dBFS quantifié (pas 1 dB, `0` = plein échelle).
-- `clipSampleCount`:
-  - nombre d’échantillons au-dessus d’un seuil d’écrêtage (`abs(x) >= 0.999` recommandé).
-- `clipRatioQ`:
-  - proportion de samples écrêtés en pour-mille (`round(1000 * clipSampleCount / N)`).
-- `dcOffsetQ`:
-  - offset DC absolu quantifié (`round(abs(mean(x)) * 1000)`).
-- `clickCount`:
-  - nombre d’événements impulsionnels détectés sur la fenêtre.
-- `clickScoreQ`:
-  - score global de risque de click (0..100 recommandé).
+`peakDbFSQ`
+:   pic temporel de la fenêtre en dBFS quantifié (pas 1 dB, `0` = plein échelle).
+
+`clipSampleCount`
+:   nombre d’échantillons au-dessus d’un seuil d’écrêtage (`abs(x) >= 0.999` recommandé).
+
+`clipRatioQ`
+:   proportion de samples écrêtés en pour-mille (`round(1000 * clipSampleCount / N)`).
+
+`dcOffsetQ`
+:   offset DC absolu quantifié (`round(abs(mean(x)) * 1000)`).
+
+`clickCount`
+:   nombre d’événements impulsionnels détectés sur la fenêtre.
+
+`clickScoreQ`
+:   score global de risque de click (0..100 recommandé).
 
 ### Heuristique de click (recommandée)
 
